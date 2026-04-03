@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -503,11 +503,11 @@
   <section id="authGate" class="auth-gate">
     <div class="auth-card">
       <h1>Mikrotik Console</h1>
-      <div class="muted" style="margin-top:6px">Авторизуйтесь для доступу до пристроїв</div>
+      <div class="muted" style="margin-top:6px">Sign in to access your devices</div>
       <form id="loginForm" style="margin-top:12px">
         <input name="username" placeholder="Username" required />
         <input name="password" type="password" placeholder="Password" required />
-        <button type="submit">Увійти</button>
+        <button type="submit">Sign In</button>
       </form>
       <div class="status" id="authStatus"></div>
     </div>
@@ -527,19 +527,19 @@
           </div>
         </div>
         <div class="panel">
-          <h2>Додати пристрій</h2>
+          <h2>Add Device</h2>
           <form id="addForm">
-            <input name="name" placeholder="Назва" required />
+            <input name="name" placeholder="Name" required />
             <input name="host" placeholder="IP / DNS" required />
             <input name="port" type="number" value="22" required />
             <input name="username" placeholder="SSH user" required />
             <input name="password" type="password" placeholder="SSH password" required />
-            <button type="submit">Зберегти</button>
+            <button type="submit">Save</button>
           </form>
 
           <div class="row" style="margin-top:10px">
-            <h2 style="margin:0">Пристрої</h2>
-            <button id="reloadDevices" class="secondary auto" type="button">Оновити</button>
+            <h2 style="margin:0">Devices</h2>
+            <button id="reloadDevices" class="secondary auto" type="button">Refresh</button>
           </div>
           <div id="deviceList" class="device-list"></div>
           <div id="status" class="status"></div>
@@ -551,21 +551,21 @@
       <section class="column-stack">
       <article class="card panel interfaces-card">
         <div class="row">
-          <h2 id="ifaceTitle" style="margin:0">Інтерфейси: не вибрано</h2>
+          <h2 id="ifaceTitle" style="margin:0">Interfaces: none selected</h2>
           <span id="sshStatus" class="ssh-indicator reconnect">SSH reconnect</span>
-          <button id="disconnectBtn" class="secondary auto" type="button">Відключитись</button>
-          <button id="testBtn" class="secondary auto" type="button">Тест SSH</button>
-          <button id="loadIfacesBtn" class="auto" type="button">Оновити</button>
+          <button id="disconnectBtn" class="secondary auto" type="button">Disconnect</button>
+          <button id="testBtn" class="secondary auto" type="button">Test SSH</button>
+          <button id="loadIfacesBtn" class="auto" type="button">Refresh</button>
         </div>
         <div class="table-wrap" style="margin-top:8px">
           <table>
             <thead>
               <tr>
-                <th>Ім'я</th>
-                <th>Тип</th>
+                <th>Name</th>
+                <th>Type</th>
                 <th>MTU</th>
-                <th>Стан</th>
-                <th>Дія</th>
+                <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="ifaceBody"></tbody>
@@ -575,19 +575,19 @@
 
       <article class="card panel">
         <div class="row">
-          <h2 style="margin:0">Бекапи</h2>
-          <button id="captureBackup" class="auto" type="button">Створити</button>
-          <button id="refreshBackups" class="secondary auto" type="button">Оновити</button>
+          <h2 style="margin:0">Backups</h2>
+          <button id="captureBackup" class="auto" type="button">Create</button>
+          <button id="refreshBackups" class="secondary auto" type="button">Refresh</button>
         </div>
         <div class="row">
           <input id="uploadBackupFile" type="file" accept=".rsc,.txt" />
-          <button id="uploadBackup" class="secondary auto" type="button">Завантажити</button>
+          <button id="uploadBackup" class="secondary auto" type="button">Upload</button>
         </div>
         <div id="backupList" class="backup-list scroll-area"></div>
       </article>
 
       <section id="usersPanel" class="card panel hidden users-compact">
-        <h2>Користувачі (Admin)</h2>
+        <h2>Users (Admin)</h2>
         <form id="userForm" class="row">
           <input name="username" placeholder="username" required />
           <input name="password" type="password" placeholder="password" required />
@@ -596,7 +596,7 @@
             <option value="operator">operator</option>
             <option value="admin">admin</option>
           </select>
-          <button type="submit" class="auto">Додати</button>
+          <button type="submit" class="auto">Add</button>
         </form>
         <div id="userList" class="user-list scroll-area"></div>
       </section>
@@ -605,20 +605,20 @@
       <section class="column-stack">
       <article class="card panel">
         <div class="row">
-          <h2 style="margin:0">Термінал</h2>
-          <button id="clearTerminal" class="secondary auto" type="button">Очистити</button>
+          <h2 style="margin:0">Terminal</h2>
+          <button id="clearTerminal" class="secondary auto" type="button">Clear</button>
         </div>
-        <textarea id="terminalInput" placeholder="Напр: /interface print terse"></textarea>
+        <textarea id="terminalInput" placeholder="Example: /interface print terse"></textarea>
         <div class="row">
-          <button id="runTerminal" type="button">Виконати на вибраному</button>
+          <button id="runTerminal" type="button">Run on selected</button>
           <button id="broadcastPreview" class="secondary" type="button">Dry-run broadcast</button>
-          <button id="broadcastConfirm" class="success" type="button" disabled>Підтвердити broadcast</button>
+          <button id="broadcastConfirm" class="success" type="button" disabled>Confirm broadcast</button>
         </div>
         <div id="terminalOutput" class="terminal"></div>
 
         <div class="row" style="margin-top:10px">
           <h2 style="margin:0">SSH Diagnostics</h2>
-          <button id="refreshDiag" class="secondary auto" type="button">Оновити</button>
+          <button id="refreshDiag" class="secondary auto" type="button">Refresh</button>
         </div>
         <div class="diag-grid" id="diagGrid">
           <div class="diag-item"><div class="diag-label">Status</div><div class="diag-value" id="diagStatus">-</div></div>
@@ -631,9 +631,9 @@
       </article>
 
       <article class="card panel">
-        <h2>Журнал дій</h2>
+        <h2>Audit Log</h2>
         <div class="row">
-          <button id="refreshAudit" class="secondary auto" type="button">Оновити журнал</button>
+          <button id="refreshAudit" class="secondary auto" type="button">Refresh Log</button>
         </div>
         <div id="auditList" class="audit-list scroll-area"></div>
       </article>
@@ -645,14 +645,14 @@
 
   <div id="ifaceEditBackdrop" class="modal-backdrop hidden"></div>
   <section id="ifaceEditModal" class="modal-card hidden">
-    <h2 style="margin-bottom:8px">Редагувати інтерфейс</h2>
+    <h2 style="margin-bottom:8px">Edit Interface</h2>
     <div class="muted" id="ifaceEditCurrent" style="margin-bottom:4px">-</div>
-    <input id="ifaceEditNewName" placeholder="Нова назва (опціонально)" />
-    <input id="ifaceEditMtu" type="number" min="68" max="65535" placeholder="MTU (опціонально)" />
-    <textarea id="ifaceEditComment" rows="3" placeholder="Comment (опціонально)"></textarea>
+    <input id="ifaceEditNewName" placeholder="New name (optional)" />
+    <input id="ifaceEditMtu" type="number" min="68" max="65535" placeholder="MTU (optional)" />
+    <textarea id="ifaceEditComment" rows="3" placeholder="Comment (optional)"></textarea>
     <div class="row" style="margin-top:8px">
-      <button id="ifaceEditSave" type="button">Зберегти зміни</button>
-      <button id="ifaceEditCancel" class="secondary" type="button">Скасувати</button>
+      <button id="ifaceEditSave" type="button">Save Changes</button>
+      <button id="ifaceEditCancel" class="secondary" type="button">Cancel</button>
     </div>
   </section>
 
@@ -852,7 +852,7 @@
         box.innerHTML = `<strong>${d.name}</strong><div class="muted">${d.host}:${d.port} • ${d.username}</div>`;
         box.onclick = () => {
           selectedDevice = d;
-          ifaceTitleEl.textContent = `Інтерфейси: ${d.name}`;
+          ifaceTitleEl.textContent = `Interfaces: ${d.name}`;
           renderDevices(window.__devices || []);
           loadInterfaces();
           loadBackups();
@@ -862,18 +862,18 @@
 
         if (can('admin')) {
           const del = document.createElement('button');
-          del.textContent = 'Видалити';
+          del.textContent = 'Delete';
           del.className = 'secondary';
           del.style.marginTop = '6px';
           del.onclick = async (e) => {
             e.stopPropagation();
-            if (!confirm(`Видалити ${d.name}?`)) return;
+            if (!confirm(`Delete ${d.name}?`)) return;
             await api(`/api/devices/${d.id}`, { method: 'DELETE' });
             if (selectedDevice?.id === d.id) {
               selectedDevice = null;
               ifaceBodyEl.innerHTML = '';
               backupListEl.innerHTML = '';
-              ifaceTitleEl.textContent = 'Інтерфейси: не вибрано';
+              ifaceTitleEl.textContent = 'Interfaces: none selected';
               setSshStatus('reconnect', null, 0);
               resetDiagnostics();
             }
@@ -917,7 +917,7 @@
         td.appendChild(actionBtn);
 
         const editBtn = document.createElement('button');
-        editBtn.textContent = 'Редагувати';
+        editBtn.textContent = 'Edit';
         editBtn.className = 'secondary';
         editBtn.style.marginTop = '6px';
         editBtn.disabled = !can('operator');
@@ -930,7 +930,7 @@
 
     function openInterfaceEdit(iface) {
       editingInterfaceName = iface.name;
-      ifaceEditCurrentEl.textContent = `Поточний інтерфейс: ${iface.name}`;
+      ifaceEditCurrentEl.textContent = `Current interface: ${iface.name}`;
       ifaceEditNewNameEl.value = '';
       ifaceEditMtuEl.value = iface.mtu || '';
       ifaceEditCommentEl.value = '';
@@ -947,7 +947,7 @@
     function renderBackups(items) {
       backupListEl.innerHTML = '';
       if (!items.length) {
-        backupListEl.innerHTML = '<div class="muted">Бекапів ще немає</div>';
+        backupListEl.innerHTML = '<div class="muted">No backups yet</div>';
         return;
       }
 
@@ -961,12 +961,12 @@
 
         const dl = document.createElement('button');
         dl.className = 'secondary auto';
-        dl.textContent = 'Скачати';
+        dl.textContent = 'Download';
         dl.onclick = async () => {
           if (!selectedDevice) return;
           try {
             await downloadBackupFile(selectedDevice.id, b.id, b.name);
-            uiStatus(`Бекап скачано: ${b.name}`);
+            uiStatus(`Backup downloaded: ${b.name}`);
           } catch (e) {
             uiStatus(e.message, true);
           }
@@ -978,22 +978,22 @@
         restore.disabled = !can('operator');
         restore.onclick = async () => {
           if (!selectedDevice) return;
-          if (!confirm(`Відновити ${b.name}?`)) return;
+          if (!confirm(`Restore ${b.name}?`)) return;
           const out = await api(`/api/devices/${selectedDevice.id}/backups/${b.id}/restore`, { method: 'POST' });
           terminalWrite(`Restore ${b.name}: ${out.output || 'OK'}`);
-          uiStatus(`Restore завершено: ${b.name}`);
+          uiStatus(`Restore completed: ${b.name}`);
           loadAudit();
         };
 
         const del = document.createElement('button');
         del.className = 'secondary auto';
-        del.textContent = 'Видалити';
+        del.textContent = 'Delete';
         del.disabled = !can('operator');
         del.onclick = async () => {
           if (!selectedDevice) return;
-          if (!confirm(`Видалити бекап ${b.name}?`)) return;
+          if (!confirm(`Delete backup ${b.name}?`)) return;
           await api(`/api/devices/${selectedDevice.id}/backups/${b.id}`, { method: 'DELETE' });
-          uiStatus(`Бекап видалено: ${b.name}`);
+          uiStatus(`Backup deleted: ${b.name}`);
           loadBackups();
           loadAudit();
         };
@@ -1009,7 +1009,7 @@
     function renderAudit(items) {
       auditListEl.innerHTML = '';
       if (!items.length) {
-        auditListEl.innerHTML = '<div class="muted">Журнал порожній</div>';
+        auditListEl.innerHTML = '<div class="muted">Audit log is empty</div>';
         return;
       }
       for (const a of items) {
@@ -1035,10 +1035,10 @@
         row.className = 'row';
         const del = document.createElement('button');
         del.className = 'secondary auto';
-        del.textContent = 'Видалити';
+        del.textContent = 'Delete';
         del.disabled = u.username === currentUser.username;
         del.onclick = async () => {
-          if (!confirm(`Видалити користувача ${u.username}?`)) return;
+          if (!confirm(`Delete user ${u.username}?`)) return;
           await api(`/api/users/${u.id}`, { method: 'DELETE' });
           loadUsers();
           loadAudit();
@@ -1053,7 +1053,7 @@
       try {
         const devices = await api('/api/devices');
         renderDevices(devices);
-        uiStatus(`Пристроїв: ${devices.length}`);
+        uiStatus(`Devices: ${devices.length}`);
       } catch (e) {
         uiStatus(e.message, true);
       }
@@ -1083,7 +1083,7 @@
 
     async function loadAudit() {
       if (!can('operator')) {
-        auditListEl.innerHTML = '<div class="muted">Доступно для operator/admin</div>';
+        auditListEl.innerHTML = '<div class="muted">Available for operator/admin only</div>';
         return;
       }
       try {
@@ -1125,7 +1125,7 @@
         });
         token = out.token;
         localStorage.setItem('mimToken', token);
-        authMsg('Успішний вхід');
+        authMsg('Signed in successfully');
         await bootstrap();
       } catch (err) {
         authMsg(err.message, true);
@@ -1142,7 +1142,7 @@
         e.target.reset();
         e.target.port.value = 22;
         await loadDevices();
-        uiStatus('Пристрій додано');
+        uiStatus('Device added');
         await loadAudit();
       } catch (err) {
         uiStatus(err.message, true);
@@ -1169,7 +1169,7 @@
     document.getElementById('refreshAudit').onclick = loadAudit;
 
     document.getElementById('testBtn').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Оберіть пристрій');
+      if (!selectedDevice) return uiStatus('Select a device');
       try {
         const out = await api(`/api/devices/${selectedDevice.id}/test`, { method: 'POST' });
         terminalWrite(out.output || 'SSH OK');
@@ -1185,11 +1185,11 @@
     };
 
     document.getElementById('disconnectBtn').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Оберіть пристрій');
+      if (!selectedDevice) return uiStatus('Select a device');
       try {
         await api(`/api/devices/${selectedDevice.id}/disconnect`, { method: 'POST' });
         terminalWrite(`SSH disconnected: ${selectedDevice.name}`);
-        uiStatus(`Відключено від ${selectedDevice.name}`);
+        uiStatus(`Disconnected from ${selectedDevice.name}`);
         await loadSshStatus();
         await loadDiagnostics();
         await loadAudit();
@@ -1203,8 +1203,8 @@
     ifaceEditBackdrop.onclick = closeInterfaceEdit;
 
     document.getElementById('ifaceEditSave').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Оберіть пристрій');
-      if (!editingInterfaceName) return uiStatus('Оберіть інтерфейс для редагування');
+      if (!selectedDevice) return uiStatus('Select a device');
+      if (!editingInterfaceName) return uiStatus('Select an interface to edit');
 
       const payload = {};
       const newName = ifaceEditNewNameEl.value.trim();
@@ -1216,7 +1216,7 @@
       if (comment) payload.comment = comment;
 
       if (!Object.keys(payload).length) {
-        return uiStatus('Немає змін для застосування');
+        return uiStatus('No changes to apply');
       }
 
       try {
@@ -1224,7 +1224,7 @@
           method: 'POST',
           body: JSON.stringify(payload),
         });
-        uiStatus(`Інтерфейс оновлено: ${editingInterfaceName}`);
+        uiStatus(`Interface updated: ${editingInterfaceName}`);
         terminalWrite(`Interface edited: ${editingInterfaceName}`);
         closeInterfaceEdit();
         await loadInterfaces();
@@ -1236,9 +1236,9 @@
     };
 
     document.getElementById('runTerminal').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Оберіть пристрій');
+      if (!selectedDevice) return uiStatus('Select a device');
       const command = document.getElementById('terminalInput').value.trim();
-      if (!command) return uiStatus('Введіть команду');
+      if (!command) return uiStatus('Enter a command');
       terminalWrite(`> [${selectedDevice.name}] ${command}`);
       try {
         const out = await api(`/api/devices/${selectedDevice.id}/terminal`, {
@@ -1259,7 +1259,7 @@
 
     document.getElementById('broadcastPreview').onclick = async () => {
       const command = document.getElementById('terminalInput').value.trim();
-      if (!command) return uiStatus('Введіть команду');
+      if (!command) return uiStatus('Enter a command');
 
       try {
         const out = await api('/api/terminal/broadcast/preview', {
@@ -1286,7 +1286,7 @@
     };
 
     document.getElementById('broadcastConfirm').onclick = async () => {
-      if (!pendingBroadcast) return uiStatus('Спочатку зроби Dry-run broadcast');
+      if (!pendingBroadcast) return uiStatus('Run Dry-run broadcast first');
 
       try {
         const out = await api('/api/terminal/broadcast/execute', {
@@ -1333,10 +1333,10 @@
     };
 
     document.getElementById('captureBackup').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Оберіть пристрій');
+      if (!selectedDevice) return uiStatus('Select a device');
       try {
         const out = await api(`/api/devices/${selectedDevice.id}/backups/capture`, { method: 'POST' });
-        uiStatus(`Бекап створено: ${out.backup.name}`);
+        uiStatus(`Backup created: ${out.backup.name}`);
         terminalWrite(`Backup created: ${out.backup.name}`);
         await loadBackups();
         await loadAudit();
@@ -1346,17 +1346,17 @@
     };
 
     document.getElementById('uploadBackup').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Оберіть пристрій');
+      if (!selectedDevice) return uiStatus('Select a device');
       const fileInput = document.getElementById('uploadBackupFile');
       const file = fileInput.files?.[0];
-      if (!file) return uiStatus('Оберіть файл');
+      if (!file) return uiStatus('Select a file');
       try {
         const content = await file.text();
         const out = await api(`/api/devices/${selectedDevice.id}/backups/upload`, {
           method: 'POST',
           body: JSON.stringify({ name: file.name, content }),
         });
-        uiStatus(`Файл завантажено: ${out.backup.name}`);
+        uiStatus(`File uploaded: ${out.backup.name}`);
         fileInput.value = '';
         await loadBackups();
         await loadAudit();
