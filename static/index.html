@@ -83,9 +83,9 @@
     }
 
     .app {
-      max-width: 1420px;
+      max-width: 1680px;
       margin: 18px auto;
-      padding: 0 14px 20px;
+      padding: 0 18px 22px;
       display: none;
       animation: fade .28s ease-out;
     }
@@ -186,10 +186,39 @@
     .row > * { flex: 1 1 0; }
     .row .auto { flex: 0 0 auto; width: auto; }
 
+    .sidebar-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .tab-btn {
+      margin: 0;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      background: color-mix(in srgb, var(--surface) 82%, transparent);
+      box-shadow: none;
+      font-weight: 700;
+    }
+
+    .tab-btn.active {
+      color: #fff;
+      border-color: transparent;
+      background: linear-gradient(100deg, var(--accent), var(--accent-2));
+      box-shadow: 0 8px 16px rgba(19, 108, 131, 0.25);
+    }
+
+    .tab-panel {
+      display: block;
+    }
+
     .device-list {
       display: grid;
-      gap: 9px;
-      max-height: 310px;
+      gap: 6px;
+      max-height: min(56vh, 560px);
       overflow: auto;
       padding-right: 2px;
     }
@@ -197,10 +226,30 @@
     .device-item {
       border: 1px solid var(--line);
       border-radius: 12px;
-      padding: 10px;
+      padding: 8px;
       background: var(--surface-soft);
       cursor: pointer;
       transition: border-color .2s ease, transform .14s ease, background .2s ease;
+    }
+
+    .device-item .muted {
+      font-size: .82rem;
+      line-height: 1.2;
+    }
+
+    .inline-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      color: var(--muted);
+      font-size: .86rem;
+    }
+
+    .inline-check input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+      padding: 0;
     }
 
     .device-item:hover {
@@ -478,6 +527,373 @@
       to { opacity: 1; }
     }
 
+    .navbar {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 16px;
+      background: linear-gradient(165deg, color-mix(in srgb, var(--surface) 92%, transparent), color-mix(in srgb, var(--surface-soft) 96%, transparent));
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      padding: 13px 16px;
+      margin-bottom: 14px;
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .navbar-brand {
+      font-size: 1.15rem;
+      font-weight: 800;
+      color: var(--accent);
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      padding: 0 4px;
+    }
+
+    .navbar-sep {
+      display: none;
+    }
+
+    .nav-items {
+      display: flex;
+      gap: 9px;
+      flex-wrap: nowrap;
+      align-items: center;
+      min-width: 0;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      scrollbar-width: thin;
+    }
+
+    .nav-items::-webkit-scrollbar {
+      height: 6px;
+    }
+
+    .nav-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: auto;
+      flex: 0 0 auto;
+      min-height: 42px;
+      padding: 9px 13px;
+      margin: 0;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      background: color-mix(in srgb, var(--surface-soft) 85%, transparent);
+      box-shadow: none;
+      font-weight: 700;
+      font-size: .9rem;
+      cursor: pointer;
+      transition: transform .12s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+      white-space: nowrap;
+    }
+
+    .nav-btn:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+      background: color-mix(in srgb, var(--surface) 80%, var(--accent) 8%);
+      box-shadow: 0 8px 16px rgba(19, 108, 131, 0.14);
+    }
+
+    .nav-btn.active {
+      color: #fff;
+      border-color: transparent;
+      background: linear-gradient(105deg, var(--accent), var(--accent-2));
+      box-shadow: 0 10px 18px rgba(19, 108, 131, 0.26);
+    }
+
+    .nav-icon {
+      margin-right: 6px;
+      font-size: 1rem;
+    }
+
+    .nav-right {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: nowrap;
+      min-width: fit-content;
+    }
+
+    .nav-user {
+      font-size: .84rem;
+      color: var(--muted);
+      white-space: nowrap;
+      padding: 0 4px;
+      font-weight: 700;
+    }
+
+    .nav-small-btn {
+      width: auto;
+      min-height: 36px;
+      padding: 8px 11px;
+      margin: 0;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      background: color-mix(in srgb, var(--surface) 78%, transparent);
+      box-shadow: none;
+      font-weight: 700;
+      font-size: .82rem;
+      cursor: pointer;
+      transition: transform .12s ease, border-color .2s ease, background .2s ease;
+      white-space: nowrap;
+    }
+
+    .device-selector {
+      display: grid;
+      grid-template-columns: auto minmax(220px, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 9px 12px;
+      background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+    }
+
+    .device-selector .device-select-dropdown {
+      margin: 0;
+    }
+
+    .device-selector .device-select-label {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 11px;
+      font-size: .82rem;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface) 86%, transparent);
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .iface-toolbar {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .iface-head {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+
+    .iface-title-wrap {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .iface-actions {
+      display: flex;
+      gap: 9px;
+      flex-wrap: wrap;
+    }
+
+    .iface-actions button {
+      width: auto;
+      margin: 0;
+      min-height: 36px;
+      padding: 8px 11px;
+      font-size: .84rem;
+    }
+
+    .nav-small-btn:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+      background: color-mix(in srgb, var(--surface-soft) 85%, var(--accent) 6%);
+      color: var(--ink);
+      box-shadow: none;
+    }
+
+    .page {
+      display: none;
+    }
+
+    .page.active {
+      display: block;
+      animation: fade .28s ease-out;
+    }
+
+    .grid-2 {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: var(--surface-soft);
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      font-size: .8rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .dev-status-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+
+    .dev-status-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      background: linear-gradient(160deg, color-mix(in srgb, var(--surface) 96%, transparent), var(--surface-soft));
+      cursor: pointer;
+      transition: transform .16s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+
+    .dev-status-card:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+      box-shadow: 0 12px 22px rgba(18, 80, 103, 0.15);
+    }
+
+    .dev-status-card.selected {
+      border-color: color-mix(in srgb, var(--accent) 62%, #fff 38%);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
+    }
+
+    .dev-status-card.active {
+      border-left: 4px solid var(--ok);
+    }
+
+    .dev-status-card.error {
+      border-left: 4px solid var(--bad);
+    }
+
+    .dev-status-main {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .dev-status-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .dev-status-title {
+      font-weight: 700;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+
+    .dev-status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 4px 9px;
+      font-size: .74rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .dev-status-chip.active {
+      color: var(--ok);
+      border-color: color-mix(in srgb, var(--ok) 50%, var(--line));
+      background: rgba(55, 172, 112, 0.12);
+    }
+
+    .dev-status-chip.idle {
+      color: var(--muted);
+      border-color: var(--line);
+      background: color-mix(in srgb, var(--surface-soft) 90%, transparent);
+    }
+
+    .dev-status-chip.error {
+      color: var(--bad);
+      border-color: color-mix(in srgb, var(--bad) 45%, var(--line));
+      background: rgba(201, 74, 62, 0.12);
+    }
+
+    .dev-status-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-size: .77rem;
+      color: var(--muted);
+    }
+
+    .dev-status-meta strong {
+      color: var(--ink);
+      font-size: .8rem;
+      font-weight: 700;
+      display: block;
+      margin-top: 1px;
+    }
+
+    .dev-status-actions {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .dev-status-actions button {
+      min-height: 34px;
+      padding: 6px 8px;
+      font-size: .78rem;
+      margin: 0;
+      width: 100%;
+    }
+
+    .dev-status-error {
+      font-size: .74rem;
+      color: var(--bad);
+      margin-top: 2px;
+      white-space: normal;
+      word-break: break-word;
+      line-height: 1.35;
+      max-height: 40px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
     @media (max-width: 1320px) {
       .content-columns {
         grid-template-columns: 1fr;
@@ -492,10 +908,66 @@
       .users-compact {
         width: 100%;
       }
+
+      .navbar {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .navbar-brand {
+        font-size: 1rem;
+      }
+
+      .nav-items {
+        order: 2;
+        overflow-x: auto;
+      }
+
+      .nav-right {
+        order: 3;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
     }
 
     @media (max-width: 1100px) {
       .dashboard { grid-template-columns: 1fr; }
+
+      .stats-row {
+        grid-template-columns: 1fr;
+      }
+
+      .dev-status-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .dev-status-meta {
+        grid-template-columns: 1fr;
+      }
+
+      .nav-items {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+      }
+
+      .device-selector {
+        grid-template-columns: 1fr;
+      }
+
+      .device-selector .device-select-label {
+        max-width: 100%;
+        justify-self: start;
+      }
+
+      .iface-actions {
+        width: 100%;
+      }
+
+      .iface-actions button {
+        flex: 1 1 140px;
+      }
     }
   </style>
 </head>
@@ -514,133 +986,14 @@
   </section>
 
   <main id="app" class="app">
-    <section class="dashboard">
-      <section class="card sidebar-card">
-        <div class="topbar">
-          <div>
-            <h1>Mikrotik Console</h1>
-            <h3 id="currentUserLabel">-</h3>
-          </div>
-          <div class="row" style="gap:6px; flex-wrap:nowrap;">
-            <button id="themeToggle" class="secondary auto" type="button">Dark</button>
-            <button id="logoutBtn" class="secondary auto" type="button">Logout</button>
-          </div>
-        </div>
-        <div class="panel">
-          <h2>Add Device</h2>
-          <form id="addForm">
-            <input name="name" placeholder="Name" required />
-            <input name="host" placeholder="IP / DNS" required />
-            <input name="port" type="number" value="22" required />
-            <input name="username" placeholder="SSH user" required />
-            <input name="password" type="password" placeholder="SSH password" required />
-            <button type="submit">Save</button>
-          </form>
-
-          <div class="row" style="margin-top:10px">
-            <h2 style="margin:0">Devices</h2>
-            <button id="reloadDevices" class="secondary auto" type="button">Refresh</button>
-          </div>
-          <div id="deviceList" class="device-list"></div>
-          <div id="status" class="status"></div>
-        </div>
-      </section>
-
-      <section class="content-stack">
-      <section class="content-columns">
-      <section class="column-stack">
-      <article class="card panel interfaces-card">
-        <div class="row">
-          <h2 id="ifaceTitle" style="margin:0">Interfaces: none selected</h2>
-          <span id="sshStatus" class="ssh-indicator reconnect">SSH reconnect</span>
-          <button id="disconnectBtn" class="secondary auto" type="button">Disconnect</button>
-          <button id="testBtn" class="secondary auto" type="button">Test SSH</button>
-          <button id="loadIfacesBtn" class="auto" type="button">Refresh</button>
-        </div>
-        <div class="table-wrap" style="margin-top:8px">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>MTU</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="ifaceBody"></tbody>
-          </table>
-        </div>
-      </article>
-
-      <article class="card panel">
-        <div class="row">
-          <h2 style="margin:0">Backups</h2>
-          <button id="captureBackup" class="auto" type="button">Create</button>
-          <button id="refreshBackups" class="secondary auto" type="button">Refresh</button>
-        </div>
-        <div class="row">
-          <input id="uploadBackupFile" type="file" accept=".rsc,.txt" />
-          <button id="uploadBackup" class="secondary auto" type="button">Upload</button>
-        </div>
-        <div id="backupList" class="backup-list scroll-area"></div>
-      </article>
-
-      <section id="usersPanel" class="card panel hidden users-compact">
-        <h2>Users (Admin)</h2>
-        <form id="userForm" class="row">
-          <input name="username" placeholder="username" required />
-          <input name="password" type="password" placeholder="password" required />
-          <select name="role" required>
-            <option value="viewer">viewer</option>
-            <option value="operator">operator</option>
-            <option value="admin">admin</option>
-          </select>
-          <button type="submit" class="auto">Add</button>
-        </form>
-        <div id="userList" class="user-list scroll-area"></div>
-      </section>
-      </section>
-
-      <section class="column-stack">
-      <article class="card panel">
-        <div class="row">
-          <h2 style="margin:0">Terminal</h2>
-          <button id="clearTerminal" class="secondary auto" type="button">Clear</button>
-        </div>
-        <textarea id="terminalInput" placeholder="Example: /interface print terse"></textarea>
-        <div class="row">
-          <button id="runTerminal" type="button">Run on selected</button>
-          <button id="broadcastPreview" class="secondary" type="button">Dry-run broadcast</button>
-          <button id="broadcastConfirm" class="success" type="button" disabled>Confirm broadcast</button>
-        </div>
-        <div id="terminalOutput" class="terminal"></div>
-
-        <div class="row" style="margin-top:10px">
-          <h2 style="margin:0">SSH Diagnostics</h2>
-          <button id="refreshDiag" class="secondary auto" type="button">Refresh</button>
-        </div>
-        <div class="diag-grid" id="diagGrid">
-          <div class="diag-item"><div class="diag-label">Status</div><div class="diag-value" id="diagStatus">-</div></div>
-          <div class="diag-item"><div class="diag-label">RTT</div><div class="diag-value" id="diagRtt">-</div></div>
-          <div class="diag-item"><div class="diag-label">Reconnect Count</div><div class="diag-value" id="diagReconnect">-</div></div>
-          <div class="diag-item"><div class="diag-label">Queue Depth</div><div class="diag-value" id="diagQueue">-</div></div>
-          <div class="diag-item"><div class="diag-label">Last Error</div><div class="diag-value" id="diagError">-</div></div>
-          <div class="diag-item"><div class="diag-label">Last Success</div><div class="diag-value" id="diagSuccess">-</div></div>
-        </div>
-      </article>
-
-      <article class="card panel">
-        <h2>Audit Log</h2>
-        <div class="row">
-          <button id="refreshAudit" class="secondary auto" type="button">Refresh Log</button>
-        </div>
-        <div id="auditList" class="audit-list scroll-area"></div>
-      </article>
-      </section>
-      </section>
-      </section>
-    </section>
+    <nav id="navbar" class="navbar"></nav>
+    <section id="page-dashboard" class="page"></section>
+    <section id="page-devices" class="page"></section>
+    <section id="page-interfaces" class="page"></section>
+    <section id="page-terminal" class="page"></section>
+    <section id="page-backups" class="page"></section>
+    <section id="page-admin" class="page"></section>
+    <div id="globalStatus" class="status"></div>
   </main>
 
   <div id="ifaceEditBackdrop" class="modal-backdrop hidden"></div>
@@ -656,739 +1009,23 @@
     </div>
   </section>
 
-  <script>
-    const roleLevel = { viewer: 1, operator: 2, admin: 3 };
-
-    const authGate = document.getElementById('authGate');
-    const app = document.getElementById('app');
-    const authStatus = document.getElementById('authStatus');
-    const statusEl = document.getElementById('status');
-    const deviceListEl = document.getElementById('deviceList');
-    const ifaceBodyEl = document.getElementById('ifaceBody');
-    const ifaceTitleEl = document.getElementById('ifaceTitle');
-    const sshStatusEl = document.getElementById('sshStatus');
-    const backupListEl = document.getElementById('backupList');
-    const auditListEl = document.getElementById('auditList');
-    const terminalOutputEl = document.getElementById('terminalOutput');
-    const diagStatusEl = document.getElementById('diagStatus');
-    const diagRttEl = document.getElementById('diagRtt');
-    const diagReconnectEl = document.getElementById('diagReconnect');
-    const diagQueueEl = document.getElementById('diagQueue');
-    const diagErrorEl = document.getElementById('diagError');
-    const diagSuccessEl = document.getElementById('diagSuccess');
-    const currentUserLabel = document.getElementById('currentUserLabel');
-    const usersPanel = document.getElementById('usersPanel');
-    const userListEl = document.getElementById('userList');
-    const addForm = document.getElementById('addForm');
-    const ifaceEditBackdrop = document.getElementById('ifaceEditBackdrop');
-    const ifaceEditModal = document.getElementById('ifaceEditModal');
-    const ifaceEditCurrentEl = document.getElementById('ifaceEditCurrent');
-    const ifaceEditNewNameEl = document.getElementById('ifaceEditNewName');
-    const ifaceEditMtuEl = document.getElementById('ifaceEditMtu');
-    const ifaceEditCommentEl = document.getElementById('ifaceEditComment');
-
-    let token = localStorage.getItem('mimToken') || '';
-    let currentUser = null;
-    let selectedDevice = null;
-    let pendingBroadcast = null;
-    let editingInterfaceName = '';
-
-    function uiStatus(msg, isError = false) {
-      statusEl.textContent = msg;
-      statusEl.style.color = isError ? '#bf3f34' : '#627367';
-    }
-
-    function authMsg(msg, isError = false) {
-      authStatus.textContent = msg;
-      authStatus.style.color = isError ? '#bf3f34' : '#627367';
-    }
-
-    function can(role) {
-      if (!currentUser) return false;
-      return roleLevel[currentUser.role] >= roleLevel[role];
-    }
-
-    function applyRoleUI() {
-      const isAdmin = can('admin');
-      const isOperator = can('operator');
-
-      usersPanel.classList.toggle('hidden', !isAdmin);
-      addForm.classList.toggle('hidden', !isAdmin);
-
-      document.getElementById('runTerminal').disabled = !isOperator;
-      document.getElementById('broadcastPreview').disabled = !isOperator;
-      document.getElementById('broadcastConfirm').disabled = !isOperator;
-      document.getElementById('captureBackup').disabled = !isOperator;
-      document.getElementById('uploadBackup').disabled = !isOperator;
-    }
-
-    async function api(url, options = {}) {
-      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const resp = await fetch(url, { ...options, headers });
-      if (resp.status === 401) {
-        logout();
-        throw new Error('Session expired. Please login again.');
-      }
-      if (!resp.ok) {
-        const ct = resp.headers.get('content-type') || '';
-        if (ct.includes('application/json')) {
-          const data = await resp.json();
-          throw new Error(data.detail || JSON.stringify(data) || 'API error');
-        }
-        throw new Error(await resp.text() || 'API error');
-      }
-      const ct = resp.headers.get('content-type') || '';
-      if (ct.includes('application/json')) return resp.json();
-      return {};
-    }
-
-    function logout() {
-      token = '';
-      currentUser = null;
-      localStorage.removeItem('mimToken');
-      app.style.display = 'none';
-      authGate.style.display = 'grid';
-    }
-
-    function terminalWrite(line, isError = false) {
-      const stamp = new Date().toLocaleTimeString();
-      const el = document.createElement('div');
-      el.textContent = `[${stamp}] ${line}`;
-      if (isError) el.style.color = '#ff8f85';
-      terminalOutputEl.appendChild(el);
-      terminalOutputEl.scrollTop = terminalOutputEl.scrollHeight;
-    }
-
-    function setSshStatus(status, idleSeconds = null, queueDepth = 0) {
-      const safeStatus = status === 'active' ? 'active' : 'reconnect';
-      sshStatusEl.classList.remove('active', 'reconnect');
-      sshStatusEl.classList.add(safeStatus);
-      const idleInfo = typeof idleSeconds === 'number' ? ` • idle ${idleSeconds}s` : '';
-      const queueInfo = queueDepth > 0 ? ` • queue ${queueDepth}` : '';
-      sshStatusEl.textContent = `SSH ${safeStatus}${idleInfo}${queueInfo}`;
-    }
-
-    function resetDiagnostics() {
-      diagStatusEl.textContent = '-';
-      diagRttEl.textContent = '-';
-      diagReconnectEl.textContent = '-';
-      diagQueueEl.textContent = '-';
-      diagErrorEl.textContent = '-';
-      diagSuccessEl.textContent = '-';
-    }
-
-    function renderDiagnostics(d) {
-      diagStatusEl.textContent = d.status || '-';
-      diagRttEl.textContent = (typeof d.rtt_ms === 'number') ? `${d.rtt_ms} ms` : '-';
-      diagReconnectEl.textContent = `${d.reconnect_count ?? 0}`;
-      diagQueueEl.textContent = `${d.queue_depth ?? 0}`;
-      diagErrorEl.textContent = d.last_error || '-';
-      diagSuccessEl.textContent = d.last_success_at || '-';
-    }
-
-    async function loadSshStatus() {
-      if (!selectedDevice) {
-        setSshStatus('reconnect', null, 0);
-        return;
-      }
-      try {
-        const out = await api(`/api/devices/${selectedDevice.id}/ssh-status`);
-        setSshStatus(out.status, out.idle_seconds, out.queue_depth || 0);
-      } catch (e) {
-        setSshStatus('reconnect', null, 0);
-      }
-    }
-
-    async function loadDiagnostics() {
-      if (!selectedDevice) {
-        resetDiagnostics();
-        return;
-      }
-      try {
-        const out = await api(`/api/devices/${selectedDevice.id}/ssh-diagnostics`);
-        renderDiagnostics(out);
-      } catch (e) {
-        resetDiagnostics();
-      }
-    }
-
-    async function downloadBackupFile(deviceId, backupId, backupName) {
-      const headers = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-
-      const resp = await fetch(`/api/devices/${deviceId}/backups/${backupId}/download`, { headers });
-      if (resp.status === 401) {
-        logout();
-        throw new Error('Session expired. Please login again.');
-      }
-      if (!resp.ok) {
-        const ct = resp.headers.get('content-type') || '';
-        if (ct.includes('application/json')) {
-          const data = await resp.json();
-          throw new Error(data.detail || 'Download failed');
-        }
-        throw new Error(await resp.text() || 'Download failed');
-      }
-
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = backupName || `backup-${backupId}.rsc`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    }
-
-    function renderDevices(devices) {
-      window.__devices = devices;
-      deviceListEl.innerHTML = '';
-
-      for (const d of devices) {
-        const box = document.createElement('div');
-        box.className = 'device-item' + (selectedDevice?.id === d.id ? ' active' : '');
-        box.innerHTML = `<strong>${d.name}</strong><div class="muted">${d.host}:${d.port} • ${d.username}</div>`;
-        box.onclick = () => {
-          selectedDevice = d;
-          ifaceTitleEl.textContent = `Interfaces: ${d.name}`;
-          renderDevices(window.__devices || []);
-          loadInterfaces();
-          loadBackups();
-          loadSshStatus();
-          loadDiagnostics();
-        };
-
-        if (can('admin')) {
-          const del = document.createElement('button');
-          del.textContent = 'Delete';
-          del.className = 'secondary';
-          del.style.marginTop = '6px';
-          del.onclick = async (e) => {
-            e.stopPropagation();
-            if (!confirm(`Delete ${d.name}?`)) return;
-            await api(`/api/devices/${d.id}`, { method: 'DELETE' });
-            if (selectedDevice?.id === d.id) {
-              selectedDevice = null;
-              ifaceBodyEl.innerHTML = '';
-              backupListEl.innerHTML = '';
-              ifaceTitleEl.textContent = 'Interfaces: none selected';
-              setSshStatus('reconnect', null, 0);
-              resetDiagnostics();
-            }
-            loadDevices();
-          };
-          box.appendChild(del);
-        }
-
-        deviceListEl.appendChild(box);
-      }
-    }
-
-    function renderInterfaces(items) {
-      ifaceBodyEl.innerHTML = '';
-      for (const i of items) {
-        const tr = document.createElement('tr');
-        const state = i.disabled
-          ? '<span class="badge bad">disabled</span>'
-          : (i.running ? '<span class="badge ok">running</span>' : '<span class="badge warn">up/no-link</span>');
-        tr.innerHTML = `
-          <td><strong>${i.name}</strong></td>
-          <td>${i.type || '-'}</td>
-          <td>${i.mtu || '-'}</td>
-          <td>${state}</td>
-          <td></td>
-        `;
-
-        const td = tr.querySelector('td:last-child');
-        const actionBtn = document.createElement('button');
-        actionBtn.textContent = i.disabled ? 'Enable' : 'Disable';
-        actionBtn.className = i.disabled ? '' : 'danger';
-        actionBtn.disabled = !can('operator');
-        actionBtn.onclick = async () => {
-          if (!selectedDevice) return;
-          await api(`/api/devices/${selectedDevice.id}/interfaces/${encodeURIComponent(i.name)}`, {
-            method: 'POST',
-            body: JSON.stringify({ disabled: !i.disabled })
-          });
-          loadInterfaces();
-        };
-        td.appendChild(actionBtn);
-
-        const editBtn = document.createElement('button');
-        editBtn.textContent = 'Edit';
-        editBtn.className = 'secondary';
-        editBtn.style.marginTop = '6px';
-        editBtn.disabled = !can('operator');
-        editBtn.onclick = () => openInterfaceEdit(i);
-        td.appendChild(editBtn);
-
-        ifaceBodyEl.appendChild(tr);
-      }
-    }
-
-    function openInterfaceEdit(iface) {
-      editingInterfaceName = iface.name;
-      ifaceEditCurrentEl.textContent = `Current interface: ${iface.name}`;
-      ifaceEditNewNameEl.value = '';
-      ifaceEditMtuEl.value = iface.mtu || '';
-      ifaceEditCommentEl.value = '';
-      ifaceEditBackdrop.classList.remove('hidden');
-      ifaceEditModal.classList.remove('hidden');
-    }
-
-    function closeInterfaceEdit() {
-      editingInterfaceName = '';
-      ifaceEditBackdrop.classList.add('hidden');
-      ifaceEditModal.classList.add('hidden');
-    }
-
-    function renderBackups(items) {
-      backupListEl.innerHTML = '';
-      if (!items.length) {
-        backupListEl.innerHTML = '<div class="muted">No backups yet</div>';
-        return;
-      }
-
-      for (const b of items) {
-        const item = document.createElement('div');
-        item.className = 'item';
-        item.innerHTML = `<strong>${b.name}</strong><div class="item-meta">${b.created_at || ''}</div>`;
-
-        const row = document.createElement('div');
-        row.className = 'row';
-
-        const dl = document.createElement('button');
-        dl.className = 'secondary auto';
-        dl.textContent = 'Download';
-        dl.onclick = async () => {
-          if (!selectedDevice) return;
-          try {
-            await downloadBackupFile(selectedDevice.id, b.id, b.name);
-            uiStatus(`Backup downloaded: ${b.name}`);
-          } catch (e) {
-            uiStatus(e.message, true);
-          }
-        };
-
-        const restore = document.createElement('button');
-        restore.className = 'danger auto';
-        restore.textContent = 'Restore';
-        restore.disabled = !can('operator');
-        restore.onclick = async () => {
-          if (!selectedDevice) return;
-          if (!confirm(`Restore ${b.name}?`)) return;
-          const out = await api(`/api/devices/${selectedDevice.id}/backups/${b.id}/restore`, { method: 'POST' });
-          terminalWrite(`Restore ${b.name}: ${out.output || 'OK'}`);
-          uiStatus(`Restore completed: ${b.name}`);
-          loadAudit();
-        };
-
-        const del = document.createElement('button');
-        del.className = 'secondary auto';
-        del.textContent = 'Delete';
-        del.disabled = !can('operator');
-        del.onclick = async () => {
-          if (!selectedDevice) return;
-          if (!confirm(`Delete backup ${b.name}?`)) return;
-          await api(`/api/devices/${selectedDevice.id}/backups/${b.id}`, { method: 'DELETE' });
-          uiStatus(`Backup deleted: ${b.name}`);
-          loadBackups();
-          loadAudit();
-        };
-
-        row.appendChild(dl);
-        row.appendChild(restore);
-        row.appendChild(del);
-        item.appendChild(row);
-        backupListEl.appendChild(item);
-      }
-    }
-
-    function renderAudit(items) {
-      auditListEl.innerHTML = '';
-      if (!items.length) {
-        auditListEl.innerHTML = '<div class="muted">Audit log is empty</div>';
-        return;
-      }
-      for (const a of items) {
-        const item = document.createElement('div');
-        item.className = 'item';
-        item.innerHTML = `
-          <strong>${a.action}</strong>
-          <div class="item-meta">${a.created_at} • ${a.username} (${a.role}) ${a.device_name ? '• ' + a.device_name : ''}</div>
-          <div class="item-meta">${a.details || ''}</div>
-        `;
-        auditListEl.appendChild(item);
-      }
-    }
-
-    function renderUsers(items) {
-      userListEl.innerHTML = '';
-      for (const u of items) {
-        const item = document.createElement('div');
-        item.className = 'item';
-        item.innerHTML = `<strong>${u.username}</strong><div class="item-meta">${u.role} • ${u.created_at}</div>`;
-
-        const row = document.createElement('div');
-        row.className = 'row';
-        const del = document.createElement('button');
-        del.className = 'secondary auto';
-        del.textContent = 'Delete';
-        del.disabled = u.username === currentUser.username;
-        del.onclick = async () => {
-          if (!confirm(`Delete user ${u.username}?`)) return;
-          await api(`/api/users/${u.id}`, { method: 'DELETE' });
-          loadUsers();
-          loadAudit();
-        };
-        row.appendChild(del);
-        item.appendChild(row);
-        userListEl.appendChild(item);
-      }
-    }
-
-    async function loadDevices() {
-      try {
-        const devices = await api('/api/devices');
-        renderDevices(devices);
-        uiStatus(`Devices: ${devices.length}`);
-      } catch (e) {
-        uiStatus(e.message, true);
-      }
-    }
-
-    async function loadInterfaces() {
-      if (!selectedDevice) return;
-      try {
-        const data = await api(`/api/devices/${selectedDevice.id}/interfaces`);
-        renderInterfaces(data);
-        await loadSshStatus();
-        await loadDiagnostics();
-      } catch (e) {
-        uiStatus(e.message, true);
-      }
-    }
-
-    async function loadBackups() {
-      if (!selectedDevice) return;
-      try {
-        const data = await api(`/api/devices/${selectedDevice.id}/backups`);
-        renderBackups(data);
-      } catch (e) {
-        uiStatus(e.message, true);
-      }
-    }
-
-    async function loadAudit() {
-      if (!can('operator')) {
-        auditListEl.innerHTML = '<div class="muted">Available for operator/admin only</div>';
-        return;
-      }
-      try {
-        const data = await api('/api/audit?limit=150');
-        renderAudit(data);
-      } catch (e) {
-        uiStatus(e.message, true);
-      }
-    }
-
-    async function loadUsers() {
-      if (!can('admin')) return;
-      const data = await api('/api/users');
-      renderUsers(data);
-    }
-
-    async function bootstrap() {
-      const me = await api('/api/auth/me');
-      currentUser = me;
-      currentUserLabel.textContent = `${me.username} • ${me.role}`;
-      authGate.style.display = 'none';
-      app.style.display = 'block';
-      applyRoleUI();
-      await loadDevices();
-      await loadAudit();
-      if (can('admin')) await loadUsers();
-    }
-
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      try {
-        const fd = new FormData(e.target);
-        const username = String(fd.get('username') || '').trim();
-        const password = String(fd.get('password') || '');
-        const out = await api('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        token = out.token;
-        localStorage.setItem('mimToken', token);
-        authMsg('Signed in successfully');
-        await bootstrap();
-      } catch (err) {
-        authMsg(err.message, true);
-      }
-    });
-
-    document.getElementById('addForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const payload = Object.fromEntries(fd.entries());
-      payload.port = Number(payload.port || 22);
-      try {
-        await api('/api/devices', { method: 'POST', body: JSON.stringify(payload) });
-        e.target.reset();
-        e.target.port.value = 22;
-        await loadDevices();
-        uiStatus('Device added');
-        await loadAudit();
-      } catch (err) {
-        uiStatus(err.message, true);
-      }
-    });
-
-    document.getElementById('userForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      try {
-        const fd = new FormData(e.target);
-        const payload = Object.fromEntries(fd.entries());
-        await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
-        e.target.reset();
-        await loadUsers();
-        await loadAudit();
-      } catch (err) {
-        uiStatus(err.message, true);
-      }
-    });
-
-    document.getElementById('reloadDevices').onclick = loadDevices;
-    document.getElementById('loadIfacesBtn').onclick = loadInterfaces;
-    document.getElementById('refreshBackups').onclick = loadBackups;
-    document.getElementById('refreshAudit').onclick = loadAudit;
-
-    document.getElementById('testBtn').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Select a device');
-      try {
-        const out = await api(`/api/devices/${selectedDevice.id}/test`, { method: 'POST' });
-        terminalWrite(out.output || 'SSH OK');
-        uiStatus('SSH OK');
-        await loadSshStatus();
-        await loadDiagnostics();
-      } catch (e) {
-        uiStatus(e.message, true);
-        terminalWrite(e.message, true);
-        await loadSshStatus();
-        await loadDiagnostics();
-      }
-    };
-
-    document.getElementById('disconnectBtn').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Select a device');
-      try {
-        await api(`/api/devices/${selectedDevice.id}/disconnect`, { method: 'POST' });
-        terminalWrite(`SSH disconnected: ${selectedDevice.name}`);
-        uiStatus(`Disconnected from ${selectedDevice.name}`);
-        await loadSshStatus();
-        await loadDiagnostics();
-        await loadAudit();
-      } catch (e) {
-        uiStatus(e.message, true);
-        terminalWrite(e.message, true);
-      }
-    };
-
-    document.getElementById('ifaceEditCancel').onclick = closeInterfaceEdit;
-    ifaceEditBackdrop.onclick = closeInterfaceEdit;
-
-    document.getElementById('ifaceEditSave').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Select a device');
-      if (!editingInterfaceName) return uiStatus('Select an interface to edit');
-
-      const payload = {};
-      const newName = ifaceEditNewNameEl.value.trim();
-      const mtuRaw = ifaceEditMtuEl.value.trim();
-      const comment = ifaceEditCommentEl.value.trim();
-
-      if (newName) payload.new_name = newName;
-      if (mtuRaw) payload.mtu = Number(mtuRaw);
-      if (comment) payload.comment = comment;
-
-      if (!Object.keys(payload).length) {
-        return uiStatus('No changes to apply');
-      }
-
-      try {
-        await api(`/api/devices/${selectedDevice.id}/interfaces/${encodeURIComponent(editingInterfaceName)}/edit`, {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
-        uiStatus(`Interface updated: ${editingInterfaceName}`);
-        terminalWrite(`Interface edited: ${editingInterfaceName}`);
-        closeInterfaceEdit();
-        await loadInterfaces();
-        await loadAudit();
-      } catch (e) {
-        uiStatus(e.message, true);
-        terminalWrite(e.message, true);
-      }
-    };
-
-    document.getElementById('runTerminal').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Select a device');
-      const command = document.getElementById('terminalInput').value.trim();
-      if (!command) return uiStatus('Enter a command');
-      terminalWrite(`> [${selectedDevice.name}] ${command}`);
-      try {
-        const out = await api(`/api/devices/${selectedDevice.id}/terminal`, {
-          method: 'POST',
-          body: JSON.stringify({ command }),
-        });
-        terminalWrite(out.output || '(empty)');
-        await loadAudit();
-        await loadSshStatus();
-        await loadDiagnostics();
-      } catch (e) {
-        uiStatus(e.message, true);
-        terminalWrite(e.message, true);
-        await loadSshStatus();
-        await loadDiagnostics();
-      }
-    };
-
-    document.getElementById('broadcastPreview').onclick = async () => {
-      const command = document.getElementById('terminalInput').value.trim();
-      if (!command) return uiStatus('Enter a command');
-
-      try {
-        const out = await api('/api/terminal/broadcast/preview', {
-          method: 'POST',
-          body: JSON.stringify({ command }),
-        });
-        pendingBroadcast = {
-          command,
-          token: out.confirm_token,
-          expiresIn: out.confirm_ttl_seconds,
-          targets: out.targets || [],
-        };
-        document.getElementById('broadcastConfirm').disabled = false;
-
-        terminalWrite(`> [ALL PREVIEW] ${command}`);
-        terminalWrite(`Targets: ${pendingBroadcast.targets.length}, confirm TTL: ${pendingBroadcast.expiresIn}s`);
-        for (const t of pendingBroadcast.targets.slice(0, 20)) {
-          terminalWrite(` - ${t.name} (queue=${t.queue_depth})`);
-        }
-      } catch (e) {
-        uiStatus(e.message, true);
-        terminalWrite(e.message, true);
-      }
-    };
-
-    document.getElementById('broadcastConfirm').onclick = async () => {
-      if (!pendingBroadcast) return uiStatus('Run Dry-run broadcast first');
-
-      try {
-        const out = await api('/api/terminal/broadcast/execute', {
-          method: 'POST',
-          body: JSON.stringify({ command: pendingBroadcast.command, confirm_token: pendingBroadcast.token }),
-        });
-        terminalWrite(`> [ALL EXECUTE] ${pendingBroadcast.command}`);
-        for (const r of out.results) {
-          if (r.ok) terminalWrite(`[${r.name}] OK\n${r.output || '(empty)'}`);
-          else terminalWrite(`[${r.name}] ERROR: ${r.error}`, true);
-        }
-        await loadAudit();
-        await loadSshStatus();
-        await loadDiagnostics();
-      } catch (e) {
-        uiStatus(e.message, true);
-        terminalWrite(e.message, true);
-      } finally {
-        pendingBroadcast = null;
-        document.getElementById('broadcastConfirm').disabled = true;
-      }
-    };
-
-    document.getElementById('refreshDiag').onclick = async () => {
-      await loadSshStatus();
-      await loadDiagnostics();
-    };
-
-    setInterval(() => {
-      if (!selectedDevice || !token) return;
-      loadSshStatus();
-      loadDiagnostics();
-    }, 10000);
-
-    document.getElementById('terminalInput').addEventListener('input', () => {
-      if (pendingBroadcast) {
-        pendingBroadcast = null;
-        document.getElementById('broadcastConfirm').disabled = true;
-      }
-    });
-
-    document.getElementById('clearTerminal').onclick = () => {
-      terminalOutputEl.innerHTML = '';
-    };
-
-    document.getElementById('captureBackup').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Select a device');
-      try {
-        const out = await api(`/api/devices/${selectedDevice.id}/backups/capture`, { method: 'POST' });
-        uiStatus(`Backup created: ${out.backup.name}`);
-        terminalWrite(`Backup created: ${out.backup.name}`);
-        await loadBackups();
-        await loadAudit();
-      } catch (e) {
-        uiStatus(e.message, true);
-      }
-    };
-
-    document.getElementById('uploadBackup').onclick = async () => {
-      if (!selectedDevice) return uiStatus('Select a device');
-      const fileInput = document.getElementById('uploadBackupFile');
-      const file = fileInput.files?.[0];
-      if (!file) return uiStatus('Select a file');
-      try {
-        const content = await file.text();
-        const out = await api(`/api/devices/${selectedDevice.id}/backups/upload`, {
-          method: 'POST',
-          body: JSON.stringify({ name: file.name, content }),
-        });
-        uiStatus(`File uploaded: ${out.backup.name}`);
-        fileInput.value = '';
-        await loadBackups();
-        await loadAudit();
-      } catch (e) {
-        uiStatus(e.message, true);
-      }
-    };
-
-    document.getElementById('themeToggle').onclick = () => {
-      const dark = document.body.classList.toggle('dark');
-      localStorage.setItem('mimTheme', dark ? 'dark' : 'light');
-      document.getElementById('themeToggle').textContent = dark ? 'Light' : 'Dark';
-    };
-
-    document.getElementById('logoutBtn').onclick = logout;
-
-    (() => {
-      const saved = localStorage.getItem('mimTheme');
-      if (saved === 'dark') {
-        document.body.classList.add('dark');
-        document.getElementById('themeToggle').textContent = 'Light';
-      }
-    })();
-
-    (async () => {
-      if (!token) return;
-      try {
-        await bootstrap();
-      } catch (_) {
-        logout();
-      }
-    })();
-  </script>
+  <div id="pwModalBackdrop" class="modal-backdrop hidden"></div>
+  <section id="pwModalCard" class="modal-card hidden">
+    <h2 style="margin-bottom:6px">Change Password</h2>
+    <div class="muted" id="pwModalFor" style="margin-bottom:10px"></div>
+    <input id="pwModalPass" type="password" placeholder="New password (min 6 chars)" />
+    <input id="pwModalConfirm" type="password" placeholder="Confirm new password" style="margin-top:8px" />
+    <div class="row" style="margin-top:8px">
+      <button id="pwModalSave" type="button">Save</button>
+      <button id="pwModalCancel" class="secondary" type="button">Cancel</button>
+    </div>
+    <div id="pwModalStatus" class="status"></div>
+  </section>
+
+<script src="/static/js/app-core.js"></script>
+<script src="/static/js/pages/dashboard.js"></script>
+<script src="/static/js/pages/devices.js"></script>
+<script src="/static/js/pages/tools.js"></script>
+<script src="/static/js/app-init.js"></script>
 </body>
 </html>

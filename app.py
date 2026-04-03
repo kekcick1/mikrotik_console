@@ -2,17 +2,20 @@ import base64
 import collections
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
 import secrets
 import socket
 import sqlite3
+import tarfile
 import threading
 import time
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import paramiko
 from cryptography.fernet import Fernet
@@ -21,12 +24,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from routes_auth_users import register_auth_user_routes
+from routes_devices import register_device_routes
+from routes_system import register_system_routes
+from routes_terminal_backups import register_terminal_backup_routes
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "devices.db"
 BACKUP_DIR = DATA_DIR / "backups"
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+SYSTEM_BACKUP_DIR = DATA_DIR / "system-backups"
+SYSTEM_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 SECRET = os.environ.get("MIM_SECRET", "")
 AUTH_SECRET = os.environ.get("MIM_AUTH_SECRET", SECRET)
 DEFAULT_ADMIN_PASSWORD = os.environ.get("MIM_ADMIN_PASSWORD", "admin")
@@ -79,14 +88,14 @@ class InterfaceToggle(BaseModel):
 
 
 class InterfaceEdit(BaseModel):
-    mtu: int | None = Field(default=None, ge=68, le=65535)
-    comment: str | None = Field(default=None, max_length=200)
     new_name: str | None = Field(default=None, max_length=80)
+    mtu: int | None = Field(default=None, ge=68, le=65535)
+    comment: str | None = Field(default=None, max_length=300)
 
 
 class BackupUpload(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    content: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1, max_length=2_000_000)
 
 
 class TerminalCommand(BaseModel):
@@ -109,9 +118,33 @@ class UserIn(BaseModel):
     role: str = Field(min_length=5, max_length=10)
 
 
+class ChangePasswordIn(BaseModel):
+    new_password: str = Field(min_length=6, max_length=255)
+
+
+class DeviceBulkImportIn(BaseModel):
+    username: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    update_existing: bool = False
+    content: str | None = Field(default=None, max_length=2_000_000)
+    server_path: str | None = Field(default=None, max_length=500)
+
+
 def init_db() -> None:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT,
+                role TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS devices (
@@ -121,18 +154,9 @@ def init_db() -> None:
                 port INTEGER NOT NULL,
                 username TEXT NOT NULL,
                 password_enc TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                owner_id INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE SET NULL
             )
             """
         )
@@ -162,8 +186,29 @@ def init_db() -> None:
             )
             """
         )
+
+        user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "password_hash" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        if "password" in user_cols:
+            rows = conn.execute("SELECT id, password, password_hash FROM users").fetchall()
+            for row in rows:
+                if (not row[2]) and row[1]:
+                    conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(str(row[1])), row[0]))
+
+        device_cols = {row[1] for row in conn.execute("PRAGMA table_info(devices)").fetchall()}
+        if "owner_id" not in device_cols:
+            conn.execute("ALTER TABLE devices ADD COLUMN owner_id INTEGER")
+
         conn.commit()
-    ensure_default_admin()
+
+    ensure_default_users()
+
+    with closing(db_conn()) as conn:
+        admin = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
+        if admin:
+            conn.execute("UPDATE devices SET owner_id = ? WHERE owner_id IS NULL", (int(admin["id"]),))
+            conn.commit()
 
 
 def db_conn() -> sqlite3.Connection:
@@ -188,15 +233,20 @@ def verify_password(password: str, saved_hash: str) -> bool:
     return hmac.compare_digest(check, f"{salt_hex}:{digest_hex}")
 
 
-def ensure_default_admin() -> None:
+def ensure_default_users() -> None:
     with closing(db_conn()) as conn:
-        row = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
-        if row:
-            return
-        conn.execute(
-            "INSERT INTO users(username, password_hash, role) VALUES (?, ?, ?)",
-            ("admin", hash_password(DEFAULT_ADMIN_PASSWORD), "admin"),
-        )
+        admin = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
+        if not admin:
+            conn.execute(
+                "INSERT INTO users(username, password_hash, role) VALUES (?, ?, ?)",
+                ("admin", hash_password(DEFAULT_ADMIN_PASSWORD), "admin"),
+            )
+        operator = conn.execute("SELECT id FROM users WHERE username = 'operator'").fetchone()
+        if not operator:
+            conn.execute(
+                "INSERT INTO users(username, password_hash, role) VALUES (?, ?, ?)",
+                ("operator", hash_password("operator"), "operator"),
+            )
         conn.commit()
 
 
@@ -548,11 +598,14 @@ def safe_ssh_exec(host: str, port: int, username: str, password: str, command: s
         raise HTTPException(status_code=400, detail=f"Network error while connecting to {host}:{port}: {e}")
 
 
-def load_device(device_id: int) -> sqlite3.Row:
+def load_device(device_id: int, actor: sqlite3.Row | None = None) -> sqlite3.Row:
     with closing(db_conn()) as conn:
         row = conn.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
+    if actor and ROLE_LEVEL.get(actor["role"], 0) < ROLE_LEVEL["admin"]:
+        if row["owner_id"] is None or int(row["owner_id"]) != int(actor["id"]):
+            raise HTTPException(status_code=404, detail="Device not found")
     return row
 
 
@@ -641,6 +694,95 @@ def save_backup(device_id: int, base_name: str, content: str) -> dict:
     return {"id": backup_id, "name": filename, "path": str(full_path)}
 
 
+def parse_device_import_lines(content: str) -> tuple[list[dict], list[str]]:
+    devices: list[dict] = []
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for idx, raw in enumerate(content.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = re.sub(r"^\d+\)\s*", "", line)
+        parts = [p.strip() for p in re.split(r"[\t,;]+", line) if p.strip()]
+        if len(parts) < 1:
+            continue
+        host = parts[0]
+        name = parts[1] if len(parts) > 1 else host
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+                errors.append(f"line {idx}: invalid host '{host}'")
+                continue
+        key = (host.lower(), name)
+        if key in seen:
+            continue
+        seen.add(key)
+        devices.append({"host": host, "name": name})
+    return devices, errors
+
+
+def _cleanup_deleted_device_runtime(host: str, port: int, username: str, password_enc: str) -> None:
+    dkey = _device_key(host, port)
+    with DEVICE_QUEUES_LOCK:
+        DEVICE_QUEUES.pop(dkey, None)
+    with SSH_DIAG_LOCK:
+        SSH_DIAG.pop(dkey, None)
+
+    keys_to_drop = []
+    try:
+        password = fernet.decrypt(password_enc.encode()).decode()
+        keys_to_drop.append(_ssh_pool_key(host, port, username, password))
+    except Exception:
+        pass
+
+    prefix = f"{host}|{port}|{username}|"
+    with SSH_POOL_LOCK:
+        for key in list(SSH_POOL.keys()):
+            if key in keys_to_drop or key.startswith(prefix):
+                entry = SSH_POOL.pop(key, None)
+                if entry:
+                    _close_client_safely(entry["client"])
+
+
+def create_system_backup_archive() -> Path:
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    out = SYSTEM_BACKUP_DIR / f"mim-system-backup-{ts}.tar.gz"
+    with tarfile.open(out, "w:gz") as tar:
+        if DB_PATH.exists():
+            tar.add(DB_PATH, arcname="data/devices.db")
+        if BACKUP_DIR.exists():
+            tar.add(BACKUP_DIR, arcname="data/backups")
+    return out
+
+
+def list_system_backups() -> list[dict]:
+    items = []
+    for path in sorted(SYSTEM_BACKUP_DIR.glob("mim-system-backup-*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True):
+        stat = path.stat()
+        items.append(
+            {
+                "name": path.name,
+                "size_bytes": int(stat.st_size),
+                "created_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat() + "Z",
+            }
+        )
+    return items
+
+
+def resolve_system_backup_path(name: str) -> Path:
+    if not re.fullmatch(r"mim-system-backup-\d{8}_\d{6}\.tar\.gz", name):
+        raise HTTPException(status_code=400, detail="Invalid backup name")
+
+    path = (SYSTEM_BACKUP_DIR / name).resolve()
+    root = SYSTEM_BACKUP_DIR.resolve()
+    if not str(path).startswith(str(root) + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid backup path")
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="System backup not found")
+    return path
+
+
 def ssh_import_script(host: str, port: int, username: str, password: str, script_content: str) -> str:
     remote_name = f"mim-restore-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.rsc"
     def _run_restore() -> str:
@@ -703,466 +845,8 @@ def on_shutdown() -> None:
     for entry in entries:
         _close_client_safely(entry["client"])
 
-
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse("static/index.html")
-
-
-@app.get("/api/health")
-def health() -> dict:
-    return {"ok": True}
-
-
-@app.post("/api/auth/login")
-def auth_login(payload: LoginIn) -> dict:
-    with closing(db_conn()) as conn:
-        row = conn.execute(
-            "SELECT id, username, role, password_hash FROM users WHERE username = ?",
-            (payload.username.strip(),),
-        ).fetchone()
-    if not row or not verify_password(payload.password, row["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = make_token(row["username"], row["role"])
-    return {"token": token, "user": {"id": row["id"], "username": row["username"], "role": row["role"]}}
-
-
-@app.get("/api/auth/me")
-def auth_me(request: Request) -> dict:
-    user = require_role(request, "viewer")
-    return {"id": user["id"], "username": user["username"], "role": user["role"]}
-
-
-@app.get("/api/users")
-def list_users(request: Request) -> list[dict]:
-    require_role(request, "admin")
-    with closing(db_conn()) as conn:
-        rows = conn.execute("SELECT id, username, role, created_at FROM users ORDER BY username").fetchall()
-    return [dict(r) for r in rows]
-
-
-@app.post("/api/users")
-def create_user(request: Request, payload: UserIn) -> dict:
-    actor = require_role(request, "admin")
-    role = payload.role.strip().lower()
-    if role not in ROLE_LEVEL:
-        raise HTTPException(status_code=400, detail="Invalid role")
-    username = payload.username.strip().lower()
-    if not re.fullmatch(r"[a-z0-9._-]{3,80}", username):
-        raise HTTPException(status_code=400, detail="Invalid username format")
-
-    with closing(db_conn()) as conn:
-        exists = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-        if exists:
-            raise HTTPException(status_code=400, detail="User already exists")
-        cur = conn.execute(
-            "INSERT INTO users(username, password_hash, role) VALUES (?, ?, ?)",
-            (username, hash_password(payload.password), role),
-        )
-        conn.commit()
-
-    log_audit(actor["username"], actor["role"], "user_create", None, f"created={username}, role={role}")
-    return {"id": cur.lastrowid, "username": username, "role": role}
-
-
-@app.delete("/api/users/{user_id}")
-def delete_user(request: Request, user_id: int) -> dict:
-    actor = require_role(request, "admin")
-    with closing(db_conn()) as conn:
-        row = conn.execute("SELECT id, username, role FROM users WHERE id = ?", (user_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="User not found")
-        if row["username"] == actor["username"]:
-            raise HTTPException(status_code=400, detail="Cannot delete yourself")
-        if row["role"] == "admin":
-            admins = conn.execute("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'").fetchone()["c"]
-            if admins <= 1:
-                raise HTTPException(status_code=400, detail="Cannot delete last admin")
-        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-        conn.commit()
-
-    log_audit(actor["username"], actor["role"], "user_delete", None, f"deleted={row['username']}")
-    return {"ok": True}
-
-
-@app.get("/api/devices")
-def list_devices(request: Request) -> list[dict]:
-    require_role(request, "viewer")
-    with closing(db_conn()) as conn:
-        rows = conn.execute(
-            "SELECT id, name, host, port, username, created_at FROM devices ORDER BY name"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-@app.post("/api/devices")
-def create_device(request: Request, payload: DeviceIn) -> dict:
-    actor = require_role(request, "admin")
-    password_enc = fernet.encrypt(payload.password.encode()).decode()
-    with closing(db_conn()) as conn:
-        cur = conn.execute(
-            "INSERT INTO devices(name, host, port, username, password_enc) VALUES (?, ?, ?, ?, ?)",
-            (payload.name.strip(), payload.host.strip(), payload.port, payload.username.strip(), password_enc),
-        )
-        conn.commit()
-        device_id = cur.lastrowid
-    log_audit(actor["username"], actor["role"], "device_create", device_id, payload.name.strip())
-    return {"id": device_id}
-
-
-@app.delete("/api/devices/{device_id}")
-def delete_device(device_id: int, request: Request) -> dict:
-    actor = require_role(request, "admin")
-    with closing(db_conn()) as conn:
-        cur = conn.execute("DELETE FROM devices WHERE id = ?", (device_id,))
-        conn.commit()
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Device not found")
-    log_audit(actor["username"], actor["role"], "device_delete", device_id, "")
-    return {"ok": True}
-
-
-@app.post("/api/devices/{device_id}/test")
-def test_device(device_id: int, request: Request) -> dict:
-    require_role(request, "viewer")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-    output = safe_ssh_exec(row["host"], row["port"], row["username"], password, "/system identity print")
-    return {"ok": True, "output": output}
-
-
-@app.get("/api/devices/{device_id}/ssh-status")
-def device_ssh_status(device_id: int, request: Request) -> dict:
-    require_role(request, "viewer")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-    key = _ssh_pool_key(row["host"], row["port"], row["username"], password)
-    dkey = _device_key(row["host"], row["port"])
-
-    active = False
-    idle_seconds = None
-    queued = 0
-
-    with SSH_POOL_LOCK:
-        entry = SSH_POOL.get(key)
-        if entry and _is_pool_entry_active(entry):
-            active = True
-            idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
-
-    with DEVICE_QUEUES_LOCK:
-        queue = DEVICE_QUEUES.get(dkey)
-        if queue:
-            queued = len(queue.get("tokens", []))
-
-    return {
-        "status": "active" if active else "reconnect",
-        "idle_seconds": idle_seconds,
-        "queue_depth": queued,
-    }
-
-
-@app.post("/api/devices/{device_id}/disconnect")
-def device_disconnect(device_id: int, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-
-    key = _ssh_pool_key(row["host"], row["port"], row["username"], password)
-    dkey = _device_key(row["host"], row["port"])
-    _drop_pooled_client(key)
-    _diag_mark_error(dkey, "manual disconnect")
-
-    log_audit(actor["username"], actor["role"], "device_disconnect", device_id, row["name"])
-    return {"ok": True, "status": "disconnected"}
-
-
-@app.get("/api/devices/{device_id}/ssh-diagnostics")
-def device_ssh_diagnostics(device_id: int, request: Request) -> dict:
-    require_role(request, "viewer")
-    row = load_device(device_id)
-    dkey = _device_key(row["host"], row["port"])
-    diag = _diag_get(dkey).copy()
-    status = device_ssh_status(device_id, request)
-
-    return {
-        "device_id": device_id,
-        "status": status["status"],
-        "queue_depth": status["queue_depth"],
-        "idle_seconds": status["idle_seconds"],
-        "rtt_ms": diag.get("last_rtt_ms"),
-        "last_error": diag.get("last_error"),
-        "reconnect_count": diag.get("reconnect_count", 0),
-        "last_connected_at": diag.get("last_connected_at"),
-        "last_success_at": diag.get("last_success_at"),
-        "last_attempt_at": diag.get("last_attempt_at"),
-    }
-
-
-@app.get("/api/devices/{device_id}/interfaces")
-def list_interfaces(device_id: int, request: Request) -> list[dict]:
-    require_role(request, "viewer")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-    raw = safe_ssh_exec(
-        row["host"],
-        row["port"],
-        row["username"],
-        password,
-        "/interface print terse without-paging",
-    )
-    interfaces = parse_interfaces(raw)
-    return interfaces
-
-
-@app.post("/api/devices/{device_id}/interfaces/{interface_name}")
-def toggle_interface(device_id: int, interface_name: str, payload: InterfaceToggle, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-
-    if not re.fullmatch(r"[\w\-.@:+/]+", interface_name):
-        raise HTTPException(status_code=400, detail="Invalid interface name")
-
-    escaped_name = interface_name.replace('"', '')
-    action = "disable" if payload.disabled else "enable"
-    command = f'/interface {action} [find where name="{escaped_name}"]'
-    output = safe_ssh_exec(row["host"], row["port"], row["username"], password, command)
-    log_audit(actor["username"], actor["role"], "interface_toggle", device_id, f"{interface_name}:{action}")
-
-    return {"ok": True, "action": action, "output": output}
-
-
-@app.post("/api/devices/{device_id}/interfaces/{interface_name}/edit")
-def edit_interface(device_id: int, interface_name: str, payload: InterfaceEdit, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-
-    if not re.fullmatch(r"[\w\-.@:+/]+", interface_name):
-        raise HTTPException(status_code=400, detail="Invalid interface name")
-
-    updates: list[str] = []
-
-    if payload.mtu is not None:
-        updates.append(f"mtu={payload.mtu}")
-
-    if payload.comment is not None:
-        safe_comment = payload.comment.replace("\n", " ").replace("\r", " ").replace('"', "").strip()
-        updates.append(f'comment="{safe_comment}"')
-
-    if payload.new_name is not None:
-        new_name = payload.new_name.strip()
-        if not new_name:
-            raise HTTPException(status_code=400, detail="New interface name cannot be empty")
-        if not re.fullmatch(r"[\w\-.@:+/]+", new_name):
-            raise HTTPException(status_code=400, detail="Invalid new interface name")
-        updates.append(f'name="{new_name}"')
-
-    if not updates:
-        raise HTTPException(status_code=400, detail="No interface changes provided")
-
-    escaped_name = interface_name.replace('"', "")
-    command = f'/interface set [find where name="{escaped_name}"] ' + " ".join(updates)
-    output = safe_ssh_exec(row["host"], row["port"], row["username"], password, command)
-    log_audit(actor["username"], actor["role"], "interface_edit", device_id, f"{interface_name}: {'; '.join(updates)}")
-
-    return {"ok": True, "output": output, "updated": updates}
-
-
-@app.post("/api/devices/{device_id}/terminal")
-def terminal_exec(device_id: int, payload: TerminalCommand, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-    command = validate_terminal_command(payload.command)
-    output = safe_ssh_exec(row["host"], row["port"], row["username"], password, command)
-    log_audit(actor["username"], actor["role"], "terminal_exec", device_id, command)
-    return {"ok": True, "command": command, "output": output}
-
-
-@app.post("/api/terminal/broadcast")
-def terminal_broadcast(payload: TerminalCommand, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    command = validate_terminal_command(payload.command)
-
-    with closing(db_conn()) as conn:
-        devices = conn.execute("SELECT * FROM devices ORDER BY name").fetchall()
-
-    results = []
-    for row in devices:
-        try:
-            password = fernet.decrypt(row["password_enc"].encode()).decode()
-            output = safe_ssh_exec(row["host"], row["port"], row["username"], password, command)
-            results.append({"device_id": row["id"], "name": row["name"], "ok": True, "output": output})
-        except HTTPException as e:
-            results.append({"device_id": row["id"], "name": row["name"], "ok": False, "error": str(e.detail)})
-        except Exception as e:
-            results.append({"device_id": row["id"], "name": row["name"], "ok": False, "error": str(e)})
-
-    log_audit(actor["username"], actor["role"], "terminal_broadcast", None, command)
-    return {"ok": True, "command": command, "results": results}
-
-
-@app.post("/api/terminal/broadcast/preview")
-def terminal_broadcast_preview(payload: TerminalCommand, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    command = validate_terminal_command(payload.command)
-
-    with closing(db_conn()) as conn:
-        devices = conn.execute("SELECT id, name, host, port FROM devices ORDER BY name").fetchall()
-
-    targets = []
-    ids = []
-    for d in devices:
-        ids.append(d["id"])
-        dkey = _device_key(d["host"], d["port"])
-        with DEVICE_QUEUES_LOCK:
-            queue = DEVICE_QUEUES.get(dkey)
-            qdepth = len(queue.get("tokens", [])) if queue else 0
-        targets.append({"id": d["id"], "name": d["name"], "queue_depth": qdepth})
-
-    token = _make_broadcast_confirm_token(command, actor["username"], ids)
-    return {
-        "ok": True,
-        "dry_run": True,
-        "command": command,
-        "targets": targets,
-        "confirm_token": token,
-        "confirm_ttl_seconds": BROADCAST_CONFIRM_TTL_SECONDS,
-    }
-
-
-@app.post("/api/terminal/broadcast/execute")
-def terminal_broadcast_execute(payload: BroadcastExecuteIn, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    command = validate_terminal_command(payload.command)
-    token_payload = _verify_broadcast_confirm_token(payload.confirm_token, command, actor["username"])
-    allowed_ids = token_payload.get("ids", [])
-
-    with closing(db_conn()) as conn:
-        if allowed_ids:
-            placeholders = ",".join("?" for _ in allowed_ids)
-            devices = conn.execute(
-                f"SELECT * FROM devices WHERE id IN ({placeholders}) ORDER BY name",
-                tuple(int(x) for x in allowed_ids),
-            ).fetchall()
-        else:
-            devices = []
-
-    results = []
-    for row in devices:
-        try:
-            password = fernet.decrypt(row["password_enc"].encode()).decode()
-            output = safe_ssh_exec(row["host"], row["port"], row["username"], password, command)
-            results.append({"device_id": row["id"], "name": row["name"], "ok": True, "output": output})
-        except HTTPException as e:
-            results.append({"device_id": row["id"], "name": row["name"], "ok": False, "error": str(e.detail)})
-        except Exception as e:
-            results.append({"device_id": row["id"], "name": row["name"], "ok": False, "error": str(e)})
-
-    log_audit(actor["username"], actor["role"], "terminal_broadcast_safe", None, command)
-    return {"ok": True, "command": command, "results": results}
-
-
-@app.get("/api/devices/{device_id}/backups")
-def list_backups(device_id: int, request: Request) -> list[dict]:
-    require_role(request, "viewer")
-    load_device(device_id)
-    with closing(db_conn()) as conn:
-        rows = conn.execute(
-            "SELECT id, name, created_at FROM backups WHERE device_id = ? ORDER BY id DESC",
-            (device_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-@app.post("/api/devices/{device_id}/backups/capture")
-def capture_backup(device_id: int, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    row = load_device(device_id)
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-    content = safe_ssh_exec(
-        row["host"],
-        row["port"],
-        row["username"],
-        password,
-        "/export terse show-sensitive",
-    )
-    if re.search(r"expected end of command|syntax error|input does not match any value", content, re.IGNORECASE):
-        raise HTTPException(status_code=400, detail=f"Backup export failed: {content[:300]}")
-    backup = save_backup(device_id, f"{row['name']}_export", content)
-    log_audit(actor["username"], actor["role"], "backup_capture", device_id, backup["name"])
-    return {"ok": True, "backup": {"id": backup["id"], "name": backup["name"]}}
-
-
-@app.post("/api/devices/{device_id}/backups/upload")
-def upload_backup(device_id: int, payload: BackupUpload, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    load_device(device_id)
-    backup = save_backup(device_id, payload.name, payload.content)
-    log_audit(actor["username"], actor["role"], "backup_upload", device_id, backup["name"])
-    return {"ok": True, "backup": {"id": backup["id"], "name": backup["name"]}}
-
-
-@app.get("/api/devices/{device_id}/backups/{backup_id}/download")
-def download_backup(device_id: int, backup_id: int, request: Request) -> PlainTextResponse:
-    require_role(request, "viewer")
-    backup = load_backup(device_id, backup_id)
-    path = Path(backup["file_path"])
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Backup file missing")
-    content = path.read_text(encoding="utf-8", errors="replace")
-    headers = {"Content-Disposition": f'attachment; filename="{backup["name"]}"'}
-    return PlainTextResponse(content=content, headers=headers)
-
-
-@app.delete("/api/devices/{device_id}/backups/{backup_id}")
-def delete_backup(device_id: int, backup_id: int, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    backup = load_backup(device_id, backup_id)
-    path = Path(backup["file_path"])
-
-    with closing(db_conn()) as conn:
-        conn.execute("DELETE FROM backups WHERE id = ? AND device_id = ?", (backup_id, device_id))
-        conn.commit()
-
-    if path.exists():
-        path.unlink()
-
-    log_audit(actor["username"], actor["role"], "backup_delete", device_id, backup["name"])
-    return {"ok": True}
-
-
-@app.post("/api/devices/{device_id}/backups/{backup_id}/restore")
-def restore_backup(device_id: int, backup_id: int, request: Request) -> dict:
-    actor = require_role(request, "operator")
-    row = load_device(device_id)
-    backup = load_backup(device_id, backup_id)
-    path = Path(backup["file_path"])
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Backup file missing")
-
-    password = fernet.decrypt(row["password_enc"].encode()).decode()
-    content = path.read_text(encoding="utf-8", errors="replace")
-    output = ssh_import_script(row["host"], row["port"], row["username"], password, content)
-    log_audit(actor["username"], actor["role"], "backup_restore", device_id, backup["name"])
-
-    return {"ok": True, "backup": backup["name"], "output": output}
-
-
-@app.get("/api/audit")
-def list_audit(request: Request, limit: int = 200) -> list[dict]:
-    require_role(request, "operator")
-    limit = max(1, min(1000, int(limit)))
-    with closing(db_conn()) as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id, a.username, a.role, a.action, a.device_id, d.name AS device_name, a.details, a.created_at
-            FROM audit_logs a
-            LEFT JOIN devices d ON d.id = a.device_id
-            ORDER BY a.id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+_route_ctx = SimpleNamespace(**globals())
+register_auth_user_routes(app, _route_ctx)
+register_device_routes(app, _route_ctx)
+register_terminal_backup_routes(app, _route_ctx)
+register_system_routes(app, _route_ctx)
