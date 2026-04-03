@@ -370,6 +370,28 @@
 
     .hidden { display: none !important; }
 
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 10, 18, 0.6);
+      backdrop-filter: blur(3px);
+      z-index: 60;
+    }
+
+    .modal-card {
+      position: fixed;
+      z-index: 61;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(560px, 94vw);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: linear-gradient(165deg, var(--surface), var(--surface-soft));
+      box-shadow: var(--shadow);
+    }
+
     .dashboard {
       display: grid;
       grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
@@ -621,6 +643,19 @@
     </section>
   </main>
 
+  <div id="ifaceEditBackdrop" class="modal-backdrop hidden"></div>
+  <section id="ifaceEditModal" class="modal-card hidden">
+    <h2 style="margin-bottom:8px">Редагувати інтерфейс</h2>
+    <div class="muted" id="ifaceEditCurrent" style="margin-bottom:4px">-</div>
+    <input id="ifaceEditNewName" placeholder="Нова назва (опціонально)" />
+    <input id="ifaceEditMtu" type="number" min="68" max="65535" placeholder="MTU (опціонально)" />
+    <textarea id="ifaceEditComment" rows="3" placeholder="Comment (опціонально)"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="ifaceEditSave" type="button">Зберегти зміни</button>
+      <button id="ifaceEditCancel" class="secondary" type="button">Скасувати</button>
+    </div>
+  </section>
+
   <script>
     const roleLevel = { viewer: 1, operator: 2, admin: 3 };
 
@@ -645,11 +680,18 @@
     const usersPanel = document.getElementById('usersPanel');
     const userListEl = document.getElementById('userList');
     const addForm = document.getElementById('addForm');
+    const ifaceEditBackdrop = document.getElementById('ifaceEditBackdrop');
+    const ifaceEditModal = document.getElementById('ifaceEditModal');
+    const ifaceEditCurrentEl = document.getElementById('ifaceEditCurrent');
+    const ifaceEditNewNameEl = document.getElementById('ifaceEditNewName');
+    const ifaceEditMtuEl = document.getElementById('ifaceEditMtu');
+    const ifaceEditCommentEl = document.getElementById('ifaceEditComment');
 
     let token = localStorage.getItem('mimToken') || '';
     let currentUser = null;
     let selectedDevice = null;
     let pendingBroadcast = null;
+    let editingInterfaceName = '';
 
     function uiStatus(msg, isError = false) {
       statusEl.textContent = msg;
@@ -873,8 +915,33 @@
           loadInterfaces();
         };
         td.appendChild(actionBtn);
+
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Редагувати';
+        editBtn.className = 'secondary';
+        editBtn.style.marginTop = '6px';
+        editBtn.disabled = !can('operator');
+        editBtn.onclick = () => openInterfaceEdit(i);
+        td.appendChild(editBtn);
+
         ifaceBodyEl.appendChild(tr);
       }
+    }
+
+    function openInterfaceEdit(iface) {
+      editingInterfaceName = iface.name;
+      ifaceEditCurrentEl.textContent = `Поточний інтерфейс: ${iface.name}`;
+      ifaceEditNewNameEl.value = '';
+      ifaceEditMtuEl.value = iface.mtu || '';
+      ifaceEditCommentEl.value = '';
+      ifaceEditBackdrop.classList.remove('hidden');
+      ifaceEditModal.classList.remove('hidden');
+    }
+
+    function closeInterfaceEdit() {
+      editingInterfaceName = '';
+      ifaceEditBackdrop.classList.add('hidden');
+      ifaceEditModal.classList.add('hidden');
     }
 
     function renderBackups(items) {
@@ -1125,6 +1192,42 @@
         uiStatus(`Відключено від ${selectedDevice.name}`);
         await loadSshStatus();
         await loadDiagnostics();
+        await loadAudit();
+      } catch (e) {
+        uiStatus(e.message, true);
+        terminalWrite(e.message, true);
+      }
+    };
+
+    document.getElementById('ifaceEditCancel').onclick = closeInterfaceEdit;
+    ifaceEditBackdrop.onclick = closeInterfaceEdit;
+
+    document.getElementById('ifaceEditSave').onclick = async () => {
+      if (!selectedDevice) return uiStatus('Оберіть пристрій');
+      if (!editingInterfaceName) return uiStatus('Оберіть інтерфейс для редагування');
+
+      const payload = {};
+      const newName = ifaceEditNewNameEl.value.trim();
+      const mtuRaw = ifaceEditMtuEl.value.trim();
+      const comment = ifaceEditCommentEl.value.trim();
+
+      if (newName) payload.new_name = newName;
+      if (mtuRaw) payload.mtu = Number(mtuRaw);
+      if (comment) payload.comment = comment;
+
+      if (!Object.keys(payload).length) {
+        return uiStatus('Немає змін для застосування');
+      }
+
+      try {
+        await api(`/api/devices/${selectedDevice.id}/interfaces/${encodeURIComponent(editingInterfaceName)}/edit`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        uiStatus(`Інтерфейс оновлено: ${editingInterfaceName}`);
+        terminalWrite(`Interface edited: ${editingInterfaceName}`);
+        closeInterfaceEdit();
+        await loadInterfaces();
         await loadAudit();
       } catch (e) {
         uiStatus(e.message, true);

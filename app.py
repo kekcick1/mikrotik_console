@@ -78,6 +78,12 @@ class InterfaceToggle(BaseModel):
     disabled: bool
 
 
+class InterfaceEdit(BaseModel):
+    mtu: int | None = Field(default=None, ge=68, le=65535)
+    comment: str | None = Field(default=None, max_length=200)
+    new_name: str | None = Field(default=None, max_length=80)
+
+
 class BackupUpload(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     content: str = Field(min_length=1)
@@ -924,6 +930,43 @@ def toggle_interface(device_id: int, interface_name: str, payload: InterfaceTogg
     log_audit(actor["username"], actor["role"], "interface_toggle", device_id, f"{interface_name}:{action}")
 
     return {"ok": True, "action": action, "output": output}
+
+
+@app.post("/api/devices/{device_id}/interfaces/{interface_name}/edit")
+def edit_interface(device_id: int, interface_name: str, payload: InterfaceEdit, request: Request) -> dict:
+    actor = require_role(request, "operator")
+    row = load_device(device_id)
+    password = fernet.decrypt(row["password_enc"].encode()).decode()
+
+    if not re.fullmatch(r"[\w\-.@:+/]+", interface_name):
+        raise HTTPException(status_code=400, detail="Invalid interface name")
+
+    updates: list[str] = []
+
+    if payload.mtu is not None:
+        updates.append(f"mtu={payload.mtu}")
+
+    if payload.comment is not None:
+        safe_comment = payload.comment.replace("\n", " ").replace("\r", " ").replace('"', "").strip()
+        updates.append(f'comment="{safe_comment}"')
+
+    if payload.new_name is not None:
+        new_name = payload.new_name.strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="New interface name cannot be empty")
+        if not re.fullmatch(r"[\w\-.@:+/]+", new_name):
+            raise HTTPException(status_code=400, detail="Invalid new interface name")
+        updates.append(f'name="{new_name}"')
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No interface changes provided")
+
+    escaped_name = interface_name.replace('"', "")
+    command = f'/interface set [find where name="{escaped_name}"] ' + " ".join(updates)
+    output = safe_ssh_exec(row["host"], row["port"], row["username"], password, command)
+    log_audit(actor["username"], actor["role"], "interface_edit", device_id, f"{interface_name}: {'; '.join(updates)}")
+
+    return {"ok": True, "output": output, "updated": updates}
 
 
 @app.post("/api/devices/{device_id}/terminal")
