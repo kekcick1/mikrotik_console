@@ -64,10 +64,10 @@ This service is designed to run behind Traefik in your existing stack.
 
 Typical compose service settings:
 
-- Build context: `./mikro-interface-manager`
+- Build context: `./mikrotik-console`
 - Internal port: `8080`
 - Host port (standalone access): `${MIM_PORT:-8080}:8080`
-- Persistent volume: `./mikro-interface-manager/data:/data`
+- Persistent volume: `./mikrotik-console/data:/data`
 - Traefik router + TLS labels
 
 ### Run Without Traefik (Standalone Compose)
@@ -76,7 +76,7 @@ From your stack folder:
 
 ```bash
 cd /home/user/Docker/traefik
-docker compose up -d --build mikro-interface-manager
+docker compose up -d --build mikrotik-console
 ```
 
 The service is also published directly to host port `8080` by default.
@@ -87,7 +87,7 @@ The service is also published directly to host port `8080` by default.
 Override host port:
 
 ```bash
-MIM_PORT=18080 docker compose up -d --build mikro-interface-manager
+MIM_PORT=18080 docker compose up -d --build mikrotik-console
 ```
 
 ### API Highlights
@@ -182,10 +182,10 @@ docker run --rm -p 8080:8080 \
 
 Типові параметри сервісу в compose:
 
-- Build context: `./mikro-interface-manager`
+- Build context: `./mikrotik-console`
 - Внутрішній порт: `8080`
 - Порт хоста (standalone доступ): `${MIM_PORT:-8080}:8080`
-- Постійне сховище: `./mikro-interface-manager/data:/data`
+- Постійне сховище: `./mikrotik-console/data:/data`
 - Traefik labels для роутингу і TLS
 
 ### Запуск без Traefik (Standalone Compose)
@@ -194,7 +194,7 @@ docker run --rm -p 8080:8080 \
 
 ```bash
 cd /home/user/Docker/traefik
-docker compose up -d --build mikro-interface-manager
+docker compose up -d --build mikrotik-console
 ```
 
 Сервіс за замовчуванням доступний на порту `8080` хоста.
@@ -205,7 +205,7 @@ docker compose up -d --build mikro-interface-manager
 Зміна порту хоста:
 
 ```bash
-MIM_PORT=18080 docker compose up -d --build mikro-interface-manager
+MIM_PORT=18080 docker compose up -d --build mikrotik-console
 ```
 
 ### Основні API
