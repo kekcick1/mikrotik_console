@@ -8,6 +8,12 @@ English and Ukrainian documentation are provided below.
 
 Web console for MikroTik fleet operations with role-based access, SSH diagnostics, safe broadcast flow, backups, and audit logs.
 
+### UI Preview
+
+![Mikrotik Console UI](assets/screenshots/screenshot-2026-04-03.png)
+
+_Current dashboard view: devices, interfaces, terminal, diagnostics, backups, and audit panel._
+
 ### Features
 
 - Device inventory and SSH connectivity test
@@ -125,6 +131,12 @@ uvicorn app:app --host 0.0.0.0 --port 8080
 ## Українська
 
 Веб-консоль для керування флотом MikroTik з рольовим доступом, SSH-діагностикою, безпечним broadcast, бекапами та журналом дій.
+
+### Скріншот інтерфейсу
+
+![Mikrotik Console UI](assets/screenshots/screenshot-2026-04-03.png)
+
+_Актуальний вигляд панелі: пристрої, інтерфейси, термінал, діагностика, бекапи та журнал дій._
 
 ### Можливості
 
