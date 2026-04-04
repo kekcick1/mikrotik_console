@@ -1,0 +1,31 @@
+networks:
+  traefik_net:
+    external: true
+
+services:
+  mikrotik-console:
+    build: .
+    container_name: mikrotik-console.${TRAEFIK_DOMAIN}
+    restart: unless-stopped
+    networks:
+      - traefik_net
+    environment:
+      MIM_SECRET: ${MIM_SECRET}
+      DATA_DIR: ${DATA_DIR:-/data}
+      MIM_ADMIN_PASSWORD: ${MIM_ADMIN_PASSWORD:-admin}
+      MIM_SSH_IDLE_TTL_SECONDS: ${MIM_SSH_IDLE_TTL_SECONDS:-120}
+      MIM_SSH_KEEPALIVE_SECONDS: ${MIM_SSH_KEEPALIVE_SECONDS:-20}
+      MIM_SSH_CONNECT_TIMEOUT: ${MIM_SSH_CONNECT_TIMEOUT:-10}
+      MIM_SSH_COMMAND_TIMEOUT: ${MIM_SSH_COMMAND_TIMEOUT:-25}
+      MIM_SSH_RETRY_ATTEMPTS: ${MIM_SSH_RETRY_ATTEMPTS:-2}
+      MIM_SSH_RETRY_BASE_MS: ${MIM_SSH_RETRY_BASE_MS:-220}
+      MIM_BROADCAST_CONFIRM_TTL_SECONDS: ${MIM_BROADCAST_CONFIRM_TTL_SECONDS:-90}
+    volumes:
+      - ./data:/data
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik_net
+      - traefik.http.routers.mikrotik-console.rule=Host(`mikrotik-console.${TRAEFIK_DOMAIN}`)
+      - traefik.http.routers.mikrotik-console.entrypoints=websecure
+      - traefik.http.routers.mikrotik-console.tls=true
+      - traefik.http.services.mikrotik-console.loadbalancer.server.port=8080
