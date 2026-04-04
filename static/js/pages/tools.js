@@ -291,16 +291,22 @@ App.addPage('terminal', 'Terminal', '💻', {
 });
 
 App.addPage('backups', 'Backups', '💾', {
+  _bulkResults: [],
+  _bulkFilter: 'all',
   init: function() {
     var self = this;
     var c = App.el('page-backups');
-    c.innerHTML = '<div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">Device Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupCaptureAllBtn" class="secondary auto" type="button">Backup All Reachable</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupBulkStatus" class="status"></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div><div class="card panel" id="systemBackupCard"><div class="row"><h2 style="margin:0">System Backup (Full)</h2><button id="systemBackupCreateBtn" class="auto" type="button">Create Full Backup</button><button id="systemBackupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div id="systemBackupStatus" class="status"></div><div id="systemBackupList" class="backup-list" style="margin-top:10px"></div></div></div>';
+    c.innerHTML = '<div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">Device Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupCaptureAllBtn" class="secondary auto" type="button">Backup All Reachable</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupBulkSummary" class="status"></div><div class="row" style="margin-top:4px"><span class="muted auto">Bulk result filter:</span><button id="backupBulkFilterAll" class="secondary auto bulk-filter-btn" type="button">All</button><button id="backupBulkFilterOk" class="secondary auto bulk-filter-btn" type="button">OK</button><button id="backupBulkFilterFail" class="secondary auto bulk-filter-btn" type="button">FAIL</button></div><div id="backupBulkResults" class="backup-bulk-list"></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div><div class="card panel" id="systemBackupCard"><div class="row"><h2 style="margin:0">System Backup (Full)</h2><button id="systemBackupCreateBtn" class="auto" type="button">Create Full Backup</button><button id="systemBackupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div id="systemBackupStatus" class="status"></div><div id="systemBackupList" class="backup-list" style="margin-top:10px"></div></div></div>';
     App.el('backupRefreshBtn').onclick = function() { self.loadBackups(); };
     App.el('backupCaptureBtn').onclick = function() { self.capture(); };
     App.el('backupCaptureAllBtn').onclick = function() { self.captureAllSequential(); };
     App.el('backupUploadBtn').onclick = function() { self.upload(); };
+    App.el('backupBulkFilterAll').onclick = function() { self.setBulkFilter('all'); };
+    App.el('backupBulkFilterOk').onclick = function() { self.setBulkFilter('ok'); };
+    App.el('backupBulkFilterFail').onclick = function() { self.setBulkFilter('fail'); };
     App.el('systemBackupRefreshBtn').onclick = function() { self.loadSystemBackups(); };
     App.el('systemBackupCreateBtn').onclick = function() { self.createSystemBackup(); };
+    this.setBulkFilter('all');
     if (!App.can('operator')) {
       App.el('backupCaptureBtn').disabled = true;
       App.el('backupCaptureAllBtn').disabled = true;
@@ -310,9 +316,49 @@ App.addPage('backups', 'Backups', '💾', {
       App.el('systemBackupCard').classList.add('hidden');
     }
   },
+  setBulkFilter: function(filter) {
+    this._bulkFilter = filter;
+    var allBtn = App.el('backupBulkFilterAll');
+    var okBtn = App.el('backupBulkFilterOk');
+    var failBtn = App.el('backupBulkFilterFail');
+    if (allBtn) allBtn.classList.toggle('active', filter === 'all');
+    if (okBtn) okBtn.classList.toggle('active', filter === 'ok');
+    if (failBtn) failBtn.classList.toggle('active', filter === 'fail');
+    this.renderBulkResults();
+  },
+  renderBulkResults: function() {
+    var resultList = App.el('backupBulkResults');
+    if (!resultList) return;
+    var details = this._bulkResults || [];
+    if (!details.length) {
+      resultList.innerHTML = '<div class="muted">No bulk backup results yet.</div>';
+      return;
+    }
+
+    var filtered = details.filter(function(r) {
+      if (this._bulkFilter === 'ok') return !!r.ok;
+      if (this._bulkFilter === 'fail') return !r.ok;
+      return true;
+    }.bind(this));
+
+    if (!filtered.length) {
+      resultList.innerHTML = '<div class="muted">No entries for selected filter.</div>';
+      return;
+    }
+
+    var html = '';
+    for (var j = 0; j < filtered.length; j++) {
+      var r = filtered[j];
+      var statusClass = r.status === 'pending' ? 'warn' : (r.ok ? 'ok' : 'bad');
+      var statusText = r.status === 'pending' ? 'PENDING' : (r.ok ? 'OK' : 'FAIL');
+      html += '<div class="item bulk-item"><span class="badge ' + statusClass + '">' + statusText + '</span><strong style="margin-left:8px">' + r.name + '</strong><div class="item-meta" style="margin-top:6px">' + r.message + '</div></div>';
+    }
+    resultList.innerHTML = html;
+  },
   onEnter: function() {
     if (App.state.selectedDevice) this.loadBackups();
     if (App.can('admin')) this.loadSystemBackups();
+    this.renderBulkResults();
   },
   onDeviceChanged: function(device) { App.el('backupList').innerHTML = ''; if (device) this.loadBackups(); },
   loadBackups: async function() {
@@ -379,8 +425,10 @@ App.addPage('backups', 'Backups', '💾', {
   },
   captureAllSequential: async function() {
     if (!App.can('operator')) return;
-    var st = App.el('backupBulkStatus');
+    var st = App.el('backupBulkSummary');
+    var resultList = App.el('backupBulkResults');
     if (st) st.textContent = '';
+    if (resultList) resultList.innerHTML = '';
 
     await App.loadDevices();
     var devices = (App.state.devices || []).slice();
@@ -392,7 +440,11 @@ App.addPage('backups', 'Backups', '💾', {
     var total = devices.length;
     var ok = 0;
     var failed = 0;
-    var details = [];
+    var details = devices.map(function(d) {
+      return { ok: false, status: 'pending', name: d.name, message: 'Waiting in queue...' };
+    });
+    this._bulkResults = details;
+    this.renderBulkResults();
 
     var allBtn = App.el('backupCaptureAllBtn');
     var oneBtn = App.el('backupCaptureBtn');
@@ -402,15 +454,23 @@ App.addPage('backups', 'Backups', '💾', {
     try {
       for (var i = 0; i < devices.length; i++) {
         var d = devices[i];
+        details[i].status = 'pending';
+        details[i].message = 'Running backup (' + (i + 1) + '/' + total + ')...';
+        this.renderBulkResults();
         if (st) st.textContent = 'Backing up ' + d.name + ' (' + (i + 1) + '/' + total + ')...';
         try {
           var out = await App.api('/api/devices/' + d.id + '/backups/capture', { method: 'POST' });
           ok += 1;
-          details.push('OK: ' + d.name + ' -> ' + (out && out.backup ? out.backup.name : 'created'));
+          details[i].ok = true;
+          details[i].status = 'done';
+          details[i].message = out && out.backup ? out.backup.name : 'created';
         } catch (e) {
           failed += 1;
-          details.push('FAIL: ' + d.name + ' -> ' + e.message);
+          details[i].ok = false;
+          details[i].status = 'done';
+          details[i].message = e.message;
         }
+        this.renderBulkResults();
       }
     } finally {
       if (allBtn) allBtn.disabled = !App.can('operator');
@@ -418,7 +478,9 @@ App.addPage('backups', 'Backups', '💾', {
     }
 
     var summary = 'Bulk backup finished. OK=' + ok + ', FAILED=' + failed + ', TOTAL=' + total;
-    if (st) st.textContent = summary + (details.length ? ' | ' + details.join(' ; ') : '');
+    if (st) st.textContent = summary;
+    this._bulkResults = details;
+    this.renderBulkResults();
     App.status(summary, failed > 0);
 
     if (App.state.selectedDevice) this.loadBackups();

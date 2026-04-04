@@ -333,6 +333,25 @@
       padding-right: 2px;
     }
 
+    .backup-bulk-list {
+      display: grid;
+      gap: 8px;
+      max-height: 220px;
+      overflow: auto;
+      padding-right: 2px;
+      margin-top: 6px;
+    }
+
+    .bulk-item {
+      border-left: 3px solid var(--line);
+    }
+
+    .bulk-filter-btn.active {
+      border-color: transparent;
+      color: #fff;
+      background: linear-gradient(100deg, var(--accent), var(--accent-2));
+    }
+
     .item {
       border: 1px solid var(--line);
       border-radius: 12px;

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-04-05 (Stable UX Update)
+
+### Added
+- Live bulk-backup progress list in Device Backups (immediate PENDING rows, then OK/FAIL updates per device).
+- Bulk result filter controls: All, OK, FAIL.
+
+### Changed
+- Bulk backup output is now structured and readable instead of a single long status line.
+
 ## 2026-04-04 (Update 2)
 
 ### Added
