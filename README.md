@@ -37,6 +37,7 @@ _Current dashboard view: devices, interfaces, terminal, diagnostics, backups, an
 - Dashboard behavior fixes (no accidental auto-connect from card select)
 - Interface table now shows `Port` and `Comment`
 - Full system backup/restore actions available in Backups page (admin)
+- `Backup All Reachable` for sequential per-device backups
 
 ### Requirements
 
@@ -137,6 +138,13 @@ For admin users, open `Backups` page and use `System Backup (Full)`:
 
 `Restore Full` replaces the current app DB and backup files from the selected archive.
 
+### Backups Page (Quick Overview)
+
+- `Create Backup` - backup for currently selected device
+- `Backup All Reachable` - sequential backups for all devices visible to current user
+- `Upload/Download/Restore` - per-device backup file operations
+- `System Backup (Full)` (admin) - full app data backup and restore
+
 ### Environment Variables
 
 Required:
@@ -208,6 +216,7 @@ _Актуальний вигляд панелі: пристрої, інтерф�
 - Виправлена поведінка Dashboard (без випадкового auto-connect по кліку картки)
 - У таблиці Interfaces додані `Port` і `Comment`
 - Повні системні backup/restore дії у сторінці Backups (admin)
+- `Backup All Reachable` для послідовних backup усіх доступних девайсів
 
 ### Вимоги
 
@@ -307,6 +316,13 @@ docker compose -f docker-compose.traefik.yml up -d --build
 - `Restore Full`
 
 `Restore Full` замінює поточну БД застосунку та backup-файли з вибраного архіву.
+
+### Сторінка Backups (Коротко)
+
+- `Create Backup` - backup поточного вибраного девайса
+- `Backup All Reachable` - послідовний backup усіх девайсів, видимих поточному користувачу
+- `Upload/Download/Restore` - операції з backup-файлами девайса
+- `System Backup (Full)` (admin) - повний backup і restore даних застосунку
 
 ### Змінні середовища
 

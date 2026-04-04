@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-04 (Update 2)
+
+### Added
+- Backups page action `Backup All Reachable`.
+- Sequential per-device backup flow using the same endpoint as manual device backup.
+- Progress and summary output for bulk backup (OK/FAILED/TOTAL).
+
+### Changed
+- Bulk backup runs in order (one device at a time) to avoid SSH overload.
+
 ## 2026-04-04
 
 ### Added

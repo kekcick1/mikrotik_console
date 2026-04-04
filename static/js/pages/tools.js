@@ -294,14 +294,16 @@ App.addPage('backups', 'Backups', '💾', {
   init: function() {
     var self = this;
     var c = App.el('page-backups');
-    c.innerHTML = '<div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">Device Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div><div class="card panel" id="systemBackupCard"><div class="row"><h2 style="margin:0">System Backup (Full)</h2><button id="systemBackupCreateBtn" class="auto" type="button">Create Full Backup</button><button id="systemBackupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div id="systemBackupStatus" class="status"></div><div id="systemBackupList" class="backup-list" style="margin-top:10px"></div></div></div>';
+    c.innerHTML = '<div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">Device Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupCaptureAllBtn" class="secondary auto" type="button">Backup All Reachable</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupBulkStatus" class="status"></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div><div class="card panel" id="systemBackupCard"><div class="row"><h2 style="margin:0">System Backup (Full)</h2><button id="systemBackupCreateBtn" class="auto" type="button">Create Full Backup</button><button id="systemBackupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div id="systemBackupStatus" class="status"></div><div id="systemBackupList" class="backup-list" style="margin-top:10px"></div></div></div>';
     App.el('backupRefreshBtn').onclick = function() { self.loadBackups(); };
     App.el('backupCaptureBtn').onclick = function() { self.capture(); };
+    App.el('backupCaptureAllBtn').onclick = function() { self.captureAllSequential(); };
     App.el('backupUploadBtn').onclick = function() { self.upload(); };
     App.el('systemBackupRefreshBtn').onclick = function() { self.loadSystemBackups(); };
     App.el('systemBackupCreateBtn').onclick = function() { self.createSystemBackup(); };
     if (!App.can('operator')) {
       App.el('backupCaptureBtn').disabled = true;
+      App.el('backupCaptureAllBtn').disabled = true;
       App.el('backupUploadBtn').disabled = true;
     }
     if (!App.can('admin')) {
@@ -374,6 +376,52 @@ App.addPage('backups', 'Backups', '💾', {
       App.status('Backup created: ' + out.backup.name);
       this.loadBackups();
     } catch (e) { App.status(e.message, true); }
+  },
+  captureAllSequential: async function() {
+    if (!App.can('operator')) return;
+    var st = App.el('backupBulkStatus');
+    if (st) st.textContent = '';
+
+    await App.loadDevices();
+    var devices = (App.state.devices || []).slice();
+    if (!devices.length) {
+      if (st) st.textContent = 'No devices available for backup.';
+      return;
+    }
+
+    var total = devices.length;
+    var ok = 0;
+    var failed = 0;
+    var details = [];
+
+    var allBtn = App.el('backupCaptureAllBtn');
+    var oneBtn = App.el('backupCaptureBtn');
+    if (allBtn) allBtn.disabled = true;
+    if (oneBtn) oneBtn.disabled = true;
+
+    try {
+      for (var i = 0; i < devices.length; i++) {
+        var d = devices[i];
+        if (st) st.textContent = 'Backing up ' + d.name + ' (' + (i + 1) + '/' + total + ')...';
+        try {
+          var out = await App.api('/api/devices/' + d.id + '/backups/capture', { method: 'POST' });
+          ok += 1;
+          details.push('OK: ' + d.name + ' -> ' + (out && out.backup ? out.backup.name : 'created'));
+        } catch (e) {
+          failed += 1;
+          details.push('FAIL: ' + d.name + ' -> ' + e.message);
+        }
+      }
+    } finally {
+      if (allBtn) allBtn.disabled = !App.can('operator');
+      if (oneBtn) oneBtn.disabled = !App.can('operator');
+    }
+
+    var summary = 'Bulk backup finished. OK=' + ok + ', FAILED=' + failed + ', TOTAL=' + total;
+    if (st) st.textContent = summary + (details.length ? ' | ' + details.join(' ; ') : '');
+    App.status(summary, failed > 0);
+
+    if (App.state.selectedDevice) this.loadBackups();
   },
   upload: async function() {
     var dev = App.state.selectedDevice;
