@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import tarfile
@@ -81,6 +82,14 @@ class DeviceIn(BaseModel):
     port: int = Field(default=22, ge=1, le=65535)
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=255)
+
+
+class DeviceUpdateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=80)
+    password: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class InterfaceToggle(BaseModel):
@@ -652,7 +661,13 @@ def parse_interfaces(raw: str) -> list[dict]:
         if m:
             flags = m.group(1)
 
-        kv = dict(re.findall(r"([\w-]+)=([^\s]+)", text))
+        kv = {}
+        for m in re.finditer(r"([\w-]+)=(\"[^\"]*\"|[^\s]+)", text):
+            key = m.group(1)
+            val = m.group(2)
+            if val.startswith('"') and val.endswith('"'):
+                val = val[1:-1]
+            kv[key] = val
         name = kv.get("name")
         if not name:
             continue
@@ -661,14 +676,18 @@ def parse_interfaces(raw: str) -> list[dict]:
         running = kv.get("running", "false") in {"yes", "true"} or "R" in flags
         iface_type = kv.get("type", "")
         mtu = kv.get("mtu", "")
+        port = kv.get("default-name", "")
+        comment = kv.get("comment", "")
 
         result.append(
             {
                 "name": name,
+                "port": port,
                 "disabled": disabled,
                 "running": running,
                 "type": iface_type,
                 "mtu": mtu,
+                "comment": comment,
             }
         )
     return sorted(result, key=lambda x: x["name"])
@@ -754,6 +773,72 @@ def create_system_backup_archive() -> Path:
         if BACKUP_DIR.exists():
             tar.add(BACKUP_DIR, arcname="data/backups")
     return out
+
+
+def restore_system_backup_archive(name: str) -> dict:
+    src = resolve_system_backup_path(name)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    db_tmp = DATA_DIR / f"devices.restore.{ts}.tmp"
+    backups_tmp = DATA_DIR / f"backups.restore.{ts}.tmp"
+    db_snapshot = DATA_DIR / f"devices.pre-restore.{ts}.db"
+    backups_snapshot = DATA_DIR / f"backups.pre-restore.{ts}"
+
+    db_bytes: bytes | None = None
+    backup_files: list[tuple[str, bytes]] = []
+
+    with tarfile.open(src, "r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            member_name = member.name.replace("\\", "/")
+            if member_name == "data/devices.db":
+                f = tar.extractfile(member)
+                if f is not None:
+                    db_bytes = f.read()
+            elif member_name.startswith("data/backups/"):
+                rel = member_name[len("data/backups/") :]
+                if not rel or rel.startswith("/") or ".." in rel.split("/"):
+                    continue
+                f = tar.extractfile(member)
+                if f is not None:
+                    backup_files.append((rel, f.read()))
+
+    if not db_bytes:
+        raise HTTPException(status_code=400, detail="System backup is missing data/devices.db")
+
+    if DB_PATH.exists():
+        shutil.copy2(DB_PATH, db_snapshot)
+    if BACKUP_DIR.exists():
+        shutil.copytree(BACKUP_DIR, backups_snapshot)
+
+    db_tmp.write_bytes(db_bytes)
+    with closing(sqlite3.connect(db_tmp)) as conn:
+        conn.execute("PRAGMA integrity_check").fetchone()
+
+    if backups_tmp.exists():
+        shutil.rmtree(backups_tmp)
+    backups_tmp.mkdir(parents=True, exist_ok=True)
+    for rel, content in backup_files:
+        out = backups_tmp / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(content)
+
+    os.replace(db_tmp, DB_PATH)
+    if BACKUP_DIR.exists():
+        shutil.rmtree(BACKUP_DIR)
+    os.replace(backups_tmp, BACKUP_DIR)
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Re-run migrations/default users after DB replacement.
+    init_db()
+
+    return {
+        "ok": True,
+        "restored_from": src.name,
+        "db_snapshot": db_snapshot.name if db_snapshot.exists() else None,
+        "backups_snapshot": backups_snapshot.name if backups_snapshot.exists() else None,
+        "restored_backup_files": len(backup_files),
+    }
 
 
 def list_system_backups() -> list[dict]:

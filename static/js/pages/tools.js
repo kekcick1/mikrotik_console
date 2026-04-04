@@ -2,7 +2,7 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
   init: function() {
     var self = this;
     var c = App.el('page-interfaces');
-    c.innerHTML = '<div class="card panel"><div class="iface-toolbar"><div class="iface-head"><div class="iface-title-wrap"><h2 id="ifaceTitle" style="margin:0">Interfaces</h2><span id="sshStatus" class="ssh-indicator reconnect">SSH reconnect</span></div><div class="iface-actions"><button id="ifaceRefreshBtn" class="auto" type="button">Refresh</button><button id="ifaceTestBtn" class="secondary auto" type="button">Test SSH</button><button id="ifaceDisconnectBtn" class="secondary auto" type="button">Disconnect</button></div></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>MTU</th><th>Status</th><th>Action</th></tr></thead><tbody id="ifaceBody"></tbody></table></div></div>';
+    c.innerHTML = '<div class="card panel"><div class="iface-toolbar"><div class="iface-head"><div class="iface-title-wrap"><h2 id="ifaceTitle" style="margin:0">Interfaces</h2><span id="sshStatus" class="ssh-indicator reconnect">SSH reconnect</span></div><div class="iface-actions"><button id="ifaceRefreshBtn" class="auto" type="button">Refresh</button><button id="ifaceTestBtn" class="secondary auto" type="button">Test SSH</button><button id="ifaceDisconnectBtn" class="secondary auto" type="button">Disconnect</button></div></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Port</th><th>Type</th><th>MTU</th><th>Comment</th><th>Status</th><th>Action</th></tr></thead><tbody id="ifaceBody"></tbody></table></div></div>';
     App.el('ifaceRefreshBtn').onclick = function() { self.loadInterfaces(); };
     App.el('ifaceTestBtn').onclick = function() { self.testSsh(); };
     App.el('ifaceDisconnectBtn').onclick = function() { self.disconnect(); };
@@ -66,7 +66,7 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
     var seen = {};
     for (var k = 0; k < items.length; k++) {
       var it = items[k];
-      var key = [it.name || '', it.type || '', it.mtu || '', !!it.disabled, !!it.running].join('|');
+      var key = [it.name || '', it.port || '', it.type || '', it.mtu || '', it.comment || '', !!it.disabled, !!it.running].join('|');
       if (seen[key]) continue;
       seen[key] = true;
       unique.push(it);
@@ -77,7 +77,7 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
         var badge = iface.disabled
           ? '<span class="badge bad">disabled</span>'
           : (iface.running ? '<span class="badge ok">running</span>' : '<span class="badge warn">up/no-link</span>');
-        tr.innerHTML = '<td><strong>' + iface.name + '</strong></td><td>' + (iface.type||'-') + '</td><td>' + (iface.mtu||'-') + '</td><td>' + badge + '</td><td></td>';
+        tr.innerHTML = '<td><strong>' + iface.name + '</strong></td><td>' + (iface.port||'-') + '</td><td>' + (iface.type||'-') + '</td><td>' + (iface.mtu||'-') + '</td><td>' + (iface.comment||'-') + '</td><td>' + badge + '</td><td></td>';
         var td = tr.querySelector('td:last-child');
         var actions = document.createElement('div');
         actions.className = 'iface-row-actions';
@@ -106,7 +106,7 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
     App.el('ifaceEditCurrent').textContent = 'Interface: ' + iface.name;
     App.el('ifaceEditNewName').value = '';
     App.el('ifaceEditMtu').value = iface.mtu || '';
-    App.el('ifaceEditComment').value = '';
+    App.el('ifaceEditComment').value = iface.comment || '';
     App.el('ifaceEditBackdrop').classList.remove('hidden');
     App.el('ifaceEditModal').classList.remove('hidden');
   },
@@ -294,16 +294,24 @@ App.addPage('backups', 'Backups', '💾', {
   init: function() {
     var self = this;
     var c = App.el('page-backups');
-    c.innerHTML = '<div class="card panel"><div class="row"><h2 style="margin:0">Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div>';
+    c.innerHTML = '<div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">Device Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div><div class="card panel" id="systemBackupCard"><div class="row"><h2 style="margin:0">System Backup (Full)</h2><button id="systemBackupCreateBtn" class="auto" type="button">Create Full Backup</button><button id="systemBackupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div id="systemBackupStatus" class="status"></div><div id="systemBackupList" class="backup-list" style="margin-top:10px"></div></div></div>';
     App.el('backupRefreshBtn').onclick = function() { self.loadBackups(); };
     App.el('backupCaptureBtn').onclick = function() { self.capture(); };
     App.el('backupUploadBtn').onclick = function() { self.upload(); };
+    App.el('systemBackupRefreshBtn').onclick = function() { self.loadSystemBackups(); };
+    App.el('systemBackupCreateBtn').onclick = function() { self.createSystemBackup(); };
     if (!App.can('operator')) {
       App.el('backupCaptureBtn').disabled = true;
       App.el('backupUploadBtn').disabled = true;
     }
+    if (!App.can('admin')) {
+      App.el('systemBackupCard').classList.add('hidden');
+    }
   },
-  onEnter: function() { if (App.state.selectedDevice) this.loadBackups(); },
+  onEnter: function() {
+    if (App.state.selectedDevice) this.loadBackups();
+    if (App.can('admin')) this.loadSystemBackups();
+  },
   onDeviceChanged: function(device) { App.el('backupList').innerHTML = ''; if (device) this.loadBackups(); },
   loadBackups: async function() {
     var dev = App.state.selectedDevice; if (!dev) return;
@@ -380,6 +388,91 @@ App.addPage('backups', 'Backups', '💾', {
       fileInput.value = '';
       this.loadBackups();
     } catch (e) { App.status(e.message, true); }
+  },
+  createSystemBackup: async function() {
+    if (!App.can('admin')) return;
+    var st = App.el('systemBackupStatus');
+    if (st) st.textContent = 'Creating full backup...';
+    try {
+      var out = await App.api('/api/system/backup/create', { method: 'POST' });
+      if (st) st.textContent = 'Created: ' + out.name + ' (' + out.size_bytes + ' bytes)';
+      await this.loadSystemBackups();
+    } catch (e) {
+      if (st) st.textContent = e.message;
+      App.status(e.message, true);
+    }
+  },
+  loadSystemBackups: async function() {
+    if (!App.can('admin')) return;
+    try {
+      var items = await App.api('/api/system/backup/list');
+      this.renderSystemBackups(items);
+    } catch (e) {
+      App.status(e.message, true);
+    }
+  },
+  renderSystemBackups: function(items) {
+    var self = this;
+    var list = App.el('systemBackupList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!items.length) {
+      list.innerHTML = '<div class="muted">No system backups yet</div>';
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      (function(b) {
+        var item = document.createElement('div');
+        item.className = 'item';
+        item.innerHTML = '<strong>' + b.name + '</strong><div class="item-meta">' + b.created_at + ' • ' + b.size_bytes + ' bytes</div>';
+        var row = document.createElement('div');
+        row.className = 'row';
+        var dl = document.createElement('button');
+        dl.className = 'secondary auto';
+        dl.textContent = 'Download';
+        dl.onclick = function() { self.downloadSystemBackup(b.name); };
+        var restore = document.createElement('button');
+        restore.className = 'danger auto';
+        restore.textContent = 'Restore Full';
+        restore.onclick = async function() {
+          if (!confirm('Restore full system from ' + b.name + '? This replaces current DB and backup files.')) return;
+          await self.restoreSystemBackup(b.name);
+        };
+        row.appendChild(dl);
+        row.appendChild(restore);
+        item.appendChild(row);
+        list.appendChild(item);
+      })(items[i]);
+    }
+  },
+  downloadSystemBackup: async function(name) {
+    try {
+      var headers = {};
+      if (App.state.token) headers.Authorization = 'Bearer ' + App.state.token;
+      var resp = await fetch('/api/system/backup/' + encodeURIComponent(name) + '/download', { headers: headers });
+      if (resp.status === 401) { App.logout(); throw new Error('Session expired'); }
+      if (!resp.ok) throw new Error('Download failed');
+      var blob = await resp.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a'); a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      App.status('Downloaded system backup: ' + name);
+    } catch (e) { App.status(e.message, true); }
+  },
+  restoreSystemBackup: async function(name) {
+    var st = App.el('systemBackupStatus');
+    if (st) st.textContent = 'Restoring full system backup...';
+    try {
+      var out = await App.api('/api/system/backup/' + encodeURIComponent(name) + '/restore', { method: 'POST' });
+      if (st) st.textContent = 'Restored: ' + out.restored_from;
+      App.status('System restore completed: ' + out.restored_from);
+      await App.loadDevices();
+      await this.loadSystemBackups();
+      this.loadBackups();
+    } catch (e) {
+      if (st) st.textContent = e.message;
+      App.status(e.message, true);
+    }
   },
 });
 

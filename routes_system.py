@@ -105,3 +105,10 @@ def register_system_routes(app, ctx) -> None:
         ctx.require_role(request, "admin")
         path = ctx.resolve_system_backup_path(backup_name)
         return FileResponse(str(path), media_type="application/gzip", filename=path.name)
+
+    @app.post("/api/system/backup/{backup_name}/restore")
+    def restore_system_backup(backup_name: str, request: Request) -> dict:
+        actor = ctx.require_role(request, "admin")
+        out = ctx.restore_system_backup_archive(backup_name)
+        ctx.log_audit(actor["username"], actor["role"], "system_backup_restore", None, backup_name)
+        return out

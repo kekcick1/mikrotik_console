@@ -64,6 +64,23 @@ App.addPage('devices', 'Devices', '🖥️', {
       if (!device) return;
 
       var delBtn = target.closest('button[data-action="delete-device"]');
+      var editBtn = target.closest('button[data-action="edit-device"]');
+
+      if (editBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!App.can('operator')) return;
+        try {
+          editBtn.disabled = true;
+          await self.editDevice(device);
+        } catch (err) {
+          App.status(err.message, true);
+        } finally {
+          editBtn.disabled = false;
+        }
+        return;
+      }
+
       if (delBtn) {
         e.preventDefault();
         e.stopPropagation();
@@ -132,6 +149,12 @@ App.addPage('devices', 'Devices', '🖥️', {
         box.dataset.deviceId = String(d.id);
         box.innerHTML = '<strong>' + d.name + '</strong><div class="muted">' + d.host + ':' + d.port + ' • ' + d.username + '</div>';
         if (App.can('operator')) {
+          var edit = document.createElement('button');
+          edit.textContent = 'Edit'; edit.className = 'secondary'; edit.style.marginTop = '6px';
+          edit.type = 'button';
+          edit.dataset.action = 'edit-device';
+          box.appendChild(edit);
+
           var del = document.createElement('button');
           del.textContent = 'Delete'; del.className = 'secondary'; del.style.marginTop = '6px';
           del.type = 'button';
@@ -149,6 +172,43 @@ App.addPage('devices', 'Devices', '🖥️', {
     if (App.state.selectedDevice && App.state.selectedDevice.id === device.id) {
       App.selectDevice(null);
     }
+    await App.loadDevices();
+    this.renderDevices();
+  },
+  editDevice: async function(device) {
+    var name = prompt('Device name:', device.name || '');
+    if (name === null) return;
+    name = String(name).trim();
+    if (!name) return App.status('Name is required', true);
+
+    var host = prompt('Host (IP/DNS):', device.host || '');
+    if (host === null) return;
+    host = String(host).trim();
+    if (!host) return App.status('Host is required', true);
+
+    var portRaw = prompt('SSH port:', String(device.port || 22));
+    if (portRaw === null) return;
+    var port = Number(String(portRaw).trim() || '22');
+    if (!Number.isFinite(port) || port < 1 || port > 65535) return App.status('Port must be 1..65535', true);
+
+    var username = prompt('SSH username:', device.username || '');
+    if (username === null) return;
+    username = String(username).trim();
+    if (!username) return App.status('Username is required', true);
+
+    var password = prompt('New SSH password (leave empty to keep current):', '');
+    if (password === null) return;
+
+    var payload = {
+      name: name,
+      host: host,
+      port: port,
+      username: username,
+    };
+    if (String(password).length > 0) payload.password = String(password);
+
+    await App.api('/api/devices/' + device.id, { method: 'PUT', body: JSON.stringify(payload) });
+    App.status('Updated: ' + name);
     await App.loadDevices();
     this.renderDevices();
   },

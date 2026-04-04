@@ -253,9 +253,6 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         body: JSON.stringify({ command: '/log print without-paging' }),
       });
       var text = (out && out.output ? String(out.output) : '').trim();
-      // Render newest entries at the bottom so reading direction is natural.
-      var lines = text ? text.split(/\r?\n/) : [];
-      if (lines.length > 1) text = lines.reverse().join('\n');
       el.textContent = text || 'No router logs available.';
       this._routerLogsCache[dev.id] = el.textContent;
       // Keep the latest log lines visible without manual scrolling.

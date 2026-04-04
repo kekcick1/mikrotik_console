@@ -278,6 +278,51 @@ def register_device_routes(app, ctx) -> None:
         )
         return {"ok": True}
 
+    @app.put("/api/devices/{device_id}")
+    def update_device(device_id: int, payload: ctx.DeviceUpdateIn, request: Request) -> dict:
+        actor = ctx.require_role(request, "operator")
+        with closing(ctx.db_conn()) as conn:
+            row = conn.execute(
+                "SELECT id, name, host, port, username, password_enc, owner_id FROM devices WHERE id = ?",
+                (device_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Device not found")
+            if ctx.ROLE_LEVEL.get(actor["role"], 0) < ctx.ROLE_LEVEL["admin"]:
+                if row["owner_id"] is None or int(row["owner_id"]) != int(actor["id"]):
+                    raise HTTPException(status_code=404, detail="Device not found")
+
+            new_name = payload.name.strip()
+            new_host = payload.host.strip()
+            new_username = payload.username.strip()
+            new_port = int(payload.port)
+            password_enc = row["password_enc"]
+
+            if payload.password is not None:
+                password_enc = ctx.fernet.encrypt(payload.password.encode()).decode()
+
+            conn.execute(
+                "UPDATE devices SET name = ?, host = ?, port = ?, username = ?, password_enc = ? WHERE id = ?",
+                (new_name, new_host, new_port, new_username, password_enc, device_id),
+            )
+            conn.commit()
+
+        # Drop old runtime SSH state; it may no longer match host/port/credentials.
+        ctx._cleanup_deleted_device_runtime(
+            row["host"],
+            int(row["port"]),
+            row["username"],
+            row["password_enc"],
+        )
+        ctx.log_audit(
+            actor["username"],
+            actor["role"],
+            "device_update",
+            device_id,
+            f"{row['name']} -> {new_name}; {row['host']}:{row['port']} -> {new_host}:{new_port}",
+        )
+        return {"ok": True}
+
     @app.post("/api/devices/{device_id}/test")
     def test_device(device_id: int, request: Request) -> dict:
         actor = ctx.require_role(request, "viewer")
@@ -352,7 +397,7 @@ def register_device_routes(app, ctx) -> None:
             row["port"],
             row["username"],
             password,
-            "/interface print terse without-paging",
+            "/interface print detail terse without-paging",
         )
         return ctx.parse_interfaces(raw)
 
