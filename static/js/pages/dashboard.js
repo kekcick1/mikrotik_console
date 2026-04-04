@@ -1,7 +1,11 @@
 App.addPage('dashboard', 'Dashboard', '📊', {
   _connectTicker: null,
   _connectStatusPoller: null,
+  _manualConnected: {},
+  _routerLogsCache: {},
   init: function() {
+    this._manualConnected = {};
+    this._routerLogsCache = {};
     var c = App.el('page-dashboard');
     c.innerHTML = '<div class="stats-row" id="dashStats"></div><div class="card panel" style="margin-bottom:14px"><div class="row"><h2 style="margin:0">MikroTik Connection Center</h2><button id="dashReloadDevices" class="secondary auto" type="button">Refresh Devices</button></div><div class="row"><button id="dashConnectBtn" type="button">Connect/Test</button><button id="dashOpenInterfaces" class="secondary" type="button">Interfaces</button><button id="dashOpenTerminal" class="secondary" type="button">Terminal</button><button id="dashOpenBackups" class="secondary" type="button">Backups</button><button id="dashDisconnectBtn" class="secondary" type="button">Disconnect</button></div><div id="dashConnStatus" class="status"></div></div><div style="margin-top:16px"><div class="card panel"><div class="row"><h2 style="margin:0">Router Logs (MikroTik)</h2><button id="dashRefreshRouterLogs" class="secondary auto" type="button">Refresh</button></div><div id="dashRouterLogs" class="terminal" style="margin-top:8px;min-height:180px;max-height:260px"></div></div></div>';
     var insights = document.createElement('div');
@@ -77,6 +81,14 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     if (connectBtn) connectBtn.disabled = !!busy;
     if (disconnectBtn) disconnectBtn.disabled = !!busy;
   },
+  markManualConnected: function(deviceId, connected) {
+    if (!deviceId) return;
+    if (connected) this._manualConnected[deviceId] = true;
+    else delete this._manualConnected[deviceId];
+  },
+  isManualConnected: function(deviceId) {
+    return !!this._manualConnected[deviceId];
+  },
   startConnectTicker: function(deviceName) {
     this.stopConnectTicker();
     var s = App.el('dashConnStatus');
@@ -125,6 +137,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     this.startConnectStatusPolling();
     try {
       var out = await App.api('/api/devices/' + dev.id + '/test', { method: 'POST' });
+      this.markManualConnected(dev.id, true);
       this.stopConnectTicker();
       if (s) {
         s.textContent = 'Connected: ' + dev.name + ' | ' + (out.output || 'SSH OK');
@@ -158,6 +171,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     }
     try {
       await App.api('/api/devices/' + dev.id + '/disconnect', { method: 'POST' });
+      this.markManualConnected(dev.id, false);
       if (s) {
         s.textContent = 'Disconnected from ' + dev.name;
         s.style.color = 'var(--warn)';
@@ -193,6 +207,18 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       el.textContent = 'Router logs are available for operator/admin.';
       return;
     }
+
+    // Never auto-connect on simple device switch from Device Status grid.
+    if (!this.isManualConnected(dev.id)) {
+      var cached = this._routerLogsCache[dev.id];
+      if (cached) {
+        el.textContent = cached;
+      } else {
+        el.textContent = 'Not connected to this device yet. Press Connect/Test to fetch live logs.';
+      }
+      return;
+    }
+
     el.textContent = 'Loading router logs...';
     try {
       var out = await App.api('/api/devices/' + dev.id + '/terminal', {
@@ -201,6 +227,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       });
       var text = (out && out.output ? String(out.output) : '').trim();
       el.textContent = text || 'No router logs available.';
+      this._routerLogsCache[dev.id] = el.textContent;
       // Keep the latest log lines visible without manual scrolling.
       el.scrollTop = el.scrollHeight;
     } catch (e) {
