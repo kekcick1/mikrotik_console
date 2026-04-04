@@ -1,5 +1,6 @@
 App.addPage('dashboard', 'Dashboard', '📊', {
   _connectTicker: null,
+  _connectStatusPoller: null,
   init: function() {
     var c = App.el('page-dashboard');
     c.innerHTML = '<div class="stats-row" id="dashStats"></div><div class="card panel" style="margin-bottom:14px"><div class="row"><h2 style="margin:0">MikroTik Connection Center</h2><button id="dashReloadDevices" class="secondary auto" type="button">Refresh Devices</button></div><div class="row"><button id="dashConnectBtn" type="button">Connect/Test</button><button id="dashOpenInterfaces" class="secondary" type="button">Interfaces</button><button id="dashOpenTerminal" class="secondary" type="button">Terminal</button><button id="dashOpenBackups" class="secondary" type="button">Backups</button><button id="dashDisconnectBtn" class="secondary" type="button">Disconnect</button></div><div id="dashConnStatus" class="status"></div></div><div style="margin-top:16px"><div class="card panel"><div class="row"><h2 style="margin:0">Router Logs (MikroTik)</h2><button id="dashRefreshRouterLogs" class="secondary auto" type="button">Refresh</button></div><div id="dashRouterLogs" class="terminal" style="margin-top:8px;min-height:180px;max-height:260px"></div></div></div>';
@@ -98,6 +99,20 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       this._connectTicker = null;
     }
   },
+  startConnectStatusPolling: function() {
+    var self = this;
+    self.stopConnectStatusPolling();
+    // Keep Device Status cards fresh while connect/test is in progress.
+    self._connectStatusPoller = setInterval(function() {
+      self.loadSystemMetrics().catch(function() {});
+    }, 5000);
+  },
+  stopConnectStatusPolling: function() {
+    if (this._connectStatusPoller) {
+      clearInterval(this._connectStatusPoller);
+      this._connectStatusPoller = null;
+    }
+  },
   connectDevice: async function(device) {
     var dev = this.setSelectedDashboardDevice(device);
     var s = App.el('dashConnStatus');
@@ -107,6 +122,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     }
     this.setConnectButtonsBusy(true);
     this.startConnectTicker(dev.name);
+    this.startConnectStatusPolling();
     try {
       var out = await App.api('/api/devices/' + dev.id + '/test', { method: 'POST' });
       this.stopConnectTicker();
@@ -123,6 +139,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       App.status(e.message, true);
     } finally {
       this.stopConnectTicker();
+      this.stopConnectStatusPolling();
       this.setConnectButtonsBusy(false);
       await this.loadSystemMetrics();
       await this.loadRouterLogs();
