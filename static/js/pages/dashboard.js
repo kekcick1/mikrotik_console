@@ -1,21 +1,19 @@
 App.addPage('dashboard', 'Dashboard', '📊', {
-  _ds: null,
+  _connectTicker: null,
   init: function() {
     var c = App.el('page-dashboard');
-    c.innerHTML = '<div class="stats-row" id="dashStats"></div><div class="card panel" style="margin-bottom:14px"><div class="row"><h2 style="margin:0">MikroTik Connection Center</h2><button id="dashReloadDevices" class="secondary auto" type="button">Refresh Devices</button></div><div class="device-selector" id="dashDevSel" style="margin-top:8px"></div><div class="row"><button id="dashConnectBtn" type="button">Connect/Test</button><button id="dashOpenInterfaces" class="secondary" type="button">Interfaces</button><button id="dashOpenTerminal" class="secondary" type="button">Terminal</button><button id="dashOpenBackups" class="secondary" type="button">Backups</button><button id="dashDisconnectBtn" class="secondary" type="button">Disconnect</button></div><div id="dashConnStatus" class="status"></div></div><div style="margin-top:16px"><div class="card panel"><div class="row"><h2 style="margin:0">Router Logs (MikroTik)</h2><button id="dashRefreshRouterLogs" class="secondary auto" type="button">Refresh</button></div><div id="dashRouterLogs" class="terminal" style="margin-top:8px;min-height:180px;max-height:260px"></div></div></div>';
+    c.innerHTML = '<div class="stats-row" id="dashStats"></div><div class="card panel" style="margin-bottom:14px"><div class="row"><h2 style="margin:0">MikroTik Connection Center</h2><button id="dashReloadDevices" class="secondary auto" type="button">Refresh Devices</button></div><div class="row"><button id="dashConnectBtn" type="button">Connect/Test</button><button id="dashOpenInterfaces" class="secondary" type="button">Interfaces</button><button id="dashOpenTerminal" class="secondary" type="button">Terminal</button><button id="dashOpenBackups" class="secondary" type="button">Backups</button><button id="dashDisconnectBtn" class="secondary" type="button">Disconnect</button></div><div id="dashConnStatus" class="status"></div></div><div style="margin-top:16px"><div class="card panel"><div class="row"><h2 style="margin:0">Router Logs (MikroTik)</h2><button id="dashRefreshRouterLogs" class="secondary auto" type="button">Refresh</button></div><div id="dashRouterLogs" class="terminal" style="margin-top:8px;min-height:180px;max-height:260px"></div></div></div>';
     var insights = document.createElement('div');
     insights.className = 'card panel';
     insights.style.marginTop = '14px';
     insights.innerHTML = '<div class="row"><h2 style="margin:0">Device Status</h2><button id="dashRefreshMetrics" class="secondary auto" type="button">Refresh</button></div><div class="stats-row" id="dashSysStats" style="margin-top:8px"></div><div id="dashDevStatusGrid" class="dev-status-grid" style="margin-top:10px"></div>';
     c.appendChild(insights);
-    this._ds = App.buildDeviceSelector(App.el('dashDevSel'));
     App.el('dashRefreshRouterLogs').onclick = this.loadRouterLogs.bind(this);
     App.el('dashRefreshMetrics').onclick = this.loadSystemMetrics.bind(this);
     App.el('dashReloadDevices').onclick = async function() {
       await App.loadDevices();
       var p = App.pages.find(function(x) { return x.id === 'dashboard'; });
       if (p) {
-        if (p._ds) p._ds.refresh();
         p.renderStats();
         await p.loadSystemMetrics();
         await p.loadRouterLogs();
@@ -38,14 +36,12 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     };
   },
   onEnter: async function() {
-    if (this._ds) this._ds.refresh();
     this.renderStats();
     this.renderConnectionState();
     await this.loadRouterLogs();
     await this.loadSystemMetrics();
   },
   onDeviceChanged: function() {
-    if (this._ds) this._ds.refresh();
     this.renderStats();
     this.renderConnectionState();
     this.loadRouterLogs();
@@ -70,10 +66,37 @@ App.addPage('dashboard', 'Dashboard', '📊', {
   setSelectedDashboardDevice: function(device) {
     if (!device) return null;
     App.selectDevice(device);
-    if (this._ds) this._ds.refresh();
     this.renderStats();
     this.renderConnectionState();
     return device;
+  },
+  setConnectButtonsBusy: function(busy) {
+    var connectBtn = App.el('dashConnectBtn');
+    var disconnectBtn = App.el('dashDisconnectBtn');
+    if (connectBtn) connectBtn.disabled = !!busy;
+    if (disconnectBtn) disconnectBtn.disabled = !!busy;
+  },
+  startConnectTicker: function(deviceName) {
+    this.stopConnectTicker();
+    var s = App.el('dashConnStatus');
+    if (!s) return;
+    var frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    var idx = 0;
+    var started = Date.now();
+    var timeoutSec = 10;
+    this._connectTicker = setInterval(function() {
+      var elapsed = (Date.now() - started) / 1000;
+      var left = Math.max(0, timeoutSec - elapsed).toFixed(1);
+      s.textContent = frames[idx % frames.length] + ' Connecting to ' + deviceName + '... ~' + left + 's';
+      s.style.color = 'var(--warn)';
+      idx += 1;
+    }, 120);
+  },
+  stopConnectTicker: function() {
+    if (this._connectTicker) {
+      clearInterval(this._connectTicker);
+      this._connectTicker = null;
+    }
   },
   connectDevice: async function(device) {
     var dev = this.setSelectedDashboardDevice(device);
@@ -82,12 +105,11 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       if (s) { s.textContent = 'Select a device first'; s.style.color = 'var(--warn)'; }
       return;
     }
-    if (s) {
-      s.textContent = 'Connecting to ' + dev.name + '...';
-      s.style.color = 'var(--warn)';
-    }
+    this.setConnectButtonsBusy(true);
+    this.startConnectTicker(dev.name);
     try {
       var out = await App.api('/api/devices/' + dev.id + '/test', { method: 'POST' });
+      this.stopConnectTicker();
       if (s) {
         s.textContent = 'Connected: ' + dev.name + ' | ' + (out.output || 'SSH OK');
         s.style.color = 'var(--ok)';
@@ -100,6 +122,8 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       }
       App.status(e.message, true);
     } finally {
+      this.stopConnectTicker();
+      this.setConnectButtonsBusy(false);
       await this.loadSystemMetrics();
       await this.loadRouterLogs();
     }

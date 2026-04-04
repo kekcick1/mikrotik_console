@@ -620,6 +620,27 @@
       min-width: fit-content;
     }
 
+    .nav-device-host {
+      min-width: 320px;
+      max-width: 480px;
+    }
+
+    .nav-device-host .device-selector {
+      padding: 6px 10px;
+      grid-template-columns: auto minmax(170px, 1fr) auto;
+      gap: 8px;
+      background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+    }
+
+    .nav-device-host .device-selector .muted {
+      font-size: .78rem;
+      white-space: nowrap;
+    }
+
+    .nav-device-host .device-selector .device-select-label {
+      max-width: 160px;
+    }
+
     .nav-user {
       font-size: .84rem;
       color: var(--muted);
@@ -707,6 +728,21 @@
       font-size: .84rem;
     }
 
+    .iface-row-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .iface-row-actions button {
+      width: auto;
+      margin: 0;
+      min-height: 30px;
+      padding: 6px 10px;
+      font-size: .78rem;
+    }
+
     .nav-small-btn:hover {
       transform: translateY(-1px);
       border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
@@ -722,6 +758,45 @@
     .page.active {
       display: block;
       animation: fade .28s ease-out;
+    }
+
+    #globalStatus {
+      display: none;
+    }
+
+    .toast-stack {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 80;
+      display: grid;
+      gap: 8px;
+      width: min(380px, calc(100vw - 24px));
+      pointer-events: none;
+    }
+
+    .toast {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--ok);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: linear-gradient(165deg, var(--surface), var(--surface-soft));
+      color: var(--ink);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+      font-size: .86rem;
+      line-height: 1.35;
+      animation: rise .18s ease-out;
+    }
+
+    .toast.error {
+      border-left-color: var(--bad);
+    }
+
+    .toast.leaving {
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity .2s ease, transform .2s ease;
     }
 
     .grid-2 {
@@ -929,6 +1004,12 @@
         flex-wrap: wrap;
         min-width: 0;
       }
+
+      .nav-device-host {
+        min-width: min(520px, 100%);
+        max-width: 100%;
+        flex: 1 1 100%;
+      }
     }
 
     @media (max-width: 1100px) {
@@ -968,6 +1049,27 @@
       .iface-actions button {
         flex: 1 1 140px;
       }
+
+      .nav-device-host .device-selector {
+        grid-template-columns: 1fr;
+      }
+
+      .nav-device-host .device-selector .device-select-label {
+        max-width: 100%;
+        justify-self: start;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+
+      .toast-stack {
+        right: 10px;
+        left: 10px;
+        width: auto;
+      }
     }
   </style>
 </head>
@@ -995,6 +1097,8 @@
     <section id="page-admin" class="page"></section>
     <div id="globalStatus" class="status"></div>
   </main>
+
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
   <div id="ifaceEditBackdrop" class="modal-backdrop hidden"></div>
   <section id="ifaceEditModal" class="modal-card hidden">

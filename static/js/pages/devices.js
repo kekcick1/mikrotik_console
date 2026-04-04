@@ -1,8 +1,9 @@
 App.addPage('devices', 'Devices', '🖥️', {
+  _filterText: '',
   init: function() {
     var self = this;
     var c = App.el('page-devices');
-    c.innerHTML = '<div class="grid-2"><div class="stack"><div class="card panel" id="devicesAddCard"><h2>Add Device</h2><form id="devAddForm"><input name="name" placeholder="Name" required /><input name="host" placeholder="IP / DNS" required /><input name="port" type="number" value="22" required /><input name="username" placeholder="SSH user" required /><input name="password" type="password" placeholder="SSH password" required /><button type="submit">Save</button></form></div><div class="card panel"><h2>Import / Export</h2><input id="devBulkFile" type="file" accept=".txt,.csv,.list" /><input id="devBulkUser" placeholder="SSH user for imported devices" /><input id="devBulkPass" type="password" placeholder="SSH password for imported devices" /><input id="devBulkPort" type="number" value="22" min="1" max="65535" placeholder="SSH port" /><label class="inline-check"><input id="devBulkUpdate" type="checkbox" />Update existing</label><input id="devBulkServerPath" value="/home/user/ip _ M" placeholder="Server file path" /><div class="row"><button id="devImportFileBtn" type="button">Import File</button><button id="devImportServerBtn" class="secondary" type="button">Import Server Path</button></div><div style="margin-top:10px"><button id="devExportBtn" class="secondary" type="button">Export Device List</button></div></div></div><div class="card panel"><div class="row"><h2 style="margin:0">Device List</h2><button id="devDeleteSelectedBtn" class="danger auto" type="button">Delete Selected</button><button id="devRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div id="devList" class="device-list" style="margin-top:8px"></div><div id="devStatus" class="status"></div></div></div>';
+    c.innerHTML = '<div class="grid-2"><div class="stack"><div class="card panel" id="devicesAddCard"><h2>Add Device</h2><form id="devAddForm"><input name="name" placeholder="Name" required /><input name="host" placeholder="IP / DNS" required /><input name="port" type="number" value="22" required /><input name="username" placeholder="SSH user" required /><input name="password" type="password" placeholder="SSH password" required /><button type="submit">Save</button></form></div><div class="card panel"><h2>Import / Export</h2><input id="devBulkFile" type="file" accept=".txt,.csv,.list" /><input id="devBulkUser" placeholder="SSH user for imported devices" /><input id="devBulkPass" type="password" placeholder="SSH password for imported devices" /><input id="devBulkPort" type="number" value="22" min="1" max="65535" placeholder="SSH port" /><label class="inline-check"><input id="devBulkUpdate" type="checkbox" />Update existing</label><input id="devBulkServerPath" value="/home/user/ip _ M" placeholder="Server file path" /><div class="row"><button id="devImportFileBtn" type="button">Import File</button><button id="devImportServerBtn" class="secondary" type="button">Import Server Path</button></div><div style="margin-top:10px"><button id="devExportBtn" class="secondary" type="button">Export Device List</button></div></div></div><div class="card panel"><div class="row"><h2 style="margin:0">Device List</h2><button id="devDeleteSelectedBtn" class="danger auto" type="button">Delete Selected</button><button id="devRefreshBtn" class="secondary auto" type="button">Refresh</button></div><input id="devSearch" placeholder="Search by name, host, port or username" /><div id="devList" class="device-list" style="margin-top:8px"></div><div id="devStatus" class="status"></div></div></div>';
 
     App.el('devAddForm').addEventListener('submit', async function(e) {
       e.preventDefault();
@@ -44,6 +45,10 @@ App.addPage('devices', 'Devices', '🖥️', {
     };
     App.el('devImportFileBtn').onclick = function() { self.doImport(false); };
     App.el('devImportServerBtn').onclick = function() { self.doImport(true); };
+    App.el('devSearch').addEventListener('input', function() {
+      self._filterText = String(this.value || '').trim().toLowerCase();
+      self.renderDevices();
+    });
 
     App.el('devList').onclick = async function(e) {
       var target = e.target;
@@ -115,8 +120,13 @@ App.addPage('devices', 'Devices', '🖥️', {
   renderDevices: function() {
     var list = App.el('devList');
     list.innerHTML = '';
+    var filter = this._filterText;
+    var visibleCount = 0;
     for (var i = 0; i < App.state.devices.length; i++) {
       (function(d) {
+        var searchable = (d.name + ' ' + d.host + ' ' + d.port + ' ' + d.username).toLowerCase();
+        if (filter && searchable.indexOf(filter) === -1) return;
+        visibleCount += 1;
         var box = document.createElement('div');
         box.className = 'device-item' + (App.state.selectedDevice && App.state.selectedDevice.id === d.id ? ' active' : '');
         box.dataset.deviceId = String(d.id);
@@ -132,7 +142,7 @@ App.addPage('devices', 'Devices', '🖥️', {
       })(App.state.devices[i]);
     }
     var st = App.el('devStatus');
-    if (st) st.textContent = 'Devices: ' + App.state.devices.length;
+    if (st) st.textContent = 'Devices: ' + visibleCount + ' / ' + App.state.devices.length;
   },
   deleteDevice: async function(device) {
     await App.api('/api/devices/' + device.id, { method: 'DELETE' });

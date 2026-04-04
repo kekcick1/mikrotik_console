@@ -6,6 +6,7 @@ const App = (() => {
     devices: [],
     pendingBroadcast: null,
     editingInterfaceName: '',
+    globalSelector: null,
   };
 
   const roleLevel = { viewer: 1, operator: 2, admin: 3 };
@@ -19,8 +20,27 @@ const App = (() => {
   function el(id) { return document.getElementById(id); }
 
   function status(msg, isError) {
+    if (!msg) return;
+
+    // Keep a small inline status for compatibility, but rely on stacked toasts for UX.
     const s = el('globalStatus');
     if (s) { s.textContent = msg; s.style.color = isError ? 'var(--bad)' : 'var(--muted)'; }
+
+    const stack = el('toastStack');
+    if (!stack) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast' + (isError ? ' error' : '');
+    toast.textContent = msg;
+    stack.prepend(toast);
+    while (stack.children.length > 5) {
+      stack.removeChild(stack.lastChild);
+    }
+    setTimeout(function() {
+      toast.classList.add('leaving');
+      setTimeout(function() {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 220);
+    }, 4000);
   }
 
   async function api(url, options) {
@@ -49,6 +69,7 @@ const App = (() => {
     state.selectedDevice = null;
     state.devices = [];
     localStorage.removeItem('mimToken');
+    state.globalSelector = null;
     el('app').style.display = 'none';
     el('authGate').style.display = 'grid';
   }
@@ -56,6 +77,7 @@ const App = (() => {
   function selectDevice(device) {
     state.selectedDevice = device;
     document.querySelectorAll('.device-select-dropdown').forEach(function(sel) { sel.value = device ? device.id : ''; });
+    if (state.globalSelector && state.globalSelector.refresh) state.globalSelector.refresh();
     for (var i = 0; i < pages.length; i++) {
       if (pages[i].onDeviceChanged) pages[i].onDeviceChanged(device);
     }
@@ -136,6 +158,13 @@ const App = (() => {
     nav.appendChild(items);
     var right = document.createElement('div');
     right.className = 'nav-right';
+
+    var selectorHost = document.createElement('div');
+    selectorHost.className = 'nav-device-host';
+    right.appendChild(selectorHost);
+
+    state.globalSelector = buildDeviceSelector(selectorHost);
+
     var userLabel = document.createElement('span');
     userLabel.className = 'nav-user';
     userLabel.textContent = state.currentUser ? state.currentUser.username + ' • ' + state.currentUser.role : '';
@@ -146,11 +175,13 @@ const App = (() => {
     right.appendChild(pwBtn);
     var themeBtn = document.createElement('button');
     themeBtn.className = 'nav-small-btn';
-    themeBtn.textContent = document.body.classList.contains('dark') ? 'Light' : 'Dark';
+    themeBtn.textContent = document.body.classList.contains('dark') ? '☀️' : '🌙';
+    themeBtn.title = document.body.classList.contains('dark') ? 'Switch to light theme' : 'Switch to dark theme';
     themeBtn.onclick = function() {
       var dark = document.body.classList.toggle('dark');
       localStorage.setItem('mimTheme', dark ? 'dark' : 'light');
-      themeBtn.textContent = dark ? 'Light' : 'Dark';
+      themeBtn.textContent = dark ? '☀️' : '🌙';
+      themeBtn.title = dark ? 'Switch to light theme' : 'Switch to dark theme';
     };
     right.appendChild(themeBtn);
     var logoutBtn = document.createElement('button');
@@ -174,6 +205,12 @@ const App = (() => {
         }
         sel.value = val;
       });
+
+      if (state.selectedDevice) {
+        var stillExists = state.devices.find(function(d) { return d.id === state.selectedDevice.id; });
+        state.selectedDevice = stillExists || null;
+      }
+      if (state.globalSelector && state.globalSelector.refresh) state.globalSelector.refresh();
       return state.devices;
     } catch (e) { status(e.message, true); return []; }
   }

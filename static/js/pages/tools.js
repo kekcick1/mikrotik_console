@@ -1,20 +1,16 @@
 App.addPage('interfaces', 'Interfaces', '🔌', {
-  _ds: null,
   init: function() {
     var self = this;
     var c = App.el('page-interfaces');
-    c.innerHTML = '<div class="card panel"><div class="iface-toolbar"><div class="device-selector" id="ifaceDevSel"></div><div class="iface-head"><div class="iface-title-wrap"><h2 id="ifaceTitle" style="margin:0">Interfaces</h2><span id="sshStatus" class="ssh-indicator reconnect">SSH reconnect</span></div><div class="iface-actions"><button id="ifaceRefreshBtn" class="auto" type="button">Refresh</button><button id="ifaceTestBtn" class="secondary auto" type="button">Test SSH</button><button id="ifaceDisconnectBtn" class="secondary auto" type="button">Disconnect</button></div></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>MTU</th><th>Status</th><th>Action</th></tr></thead><tbody id="ifaceBody"></tbody></table></div></div>';
-    this._ds = App.buildDeviceSelector(App.el('ifaceDevSel'));
+    c.innerHTML = '<div class="card panel"><div class="iface-toolbar"><div class="iface-head"><div class="iface-title-wrap"><h2 id="ifaceTitle" style="margin:0">Interfaces</h2><span id="sshStatus" class="ssh-indicator reconnect">SSH reconnect</span></div><div class="iface-actions"><button id="ifaceRefreshBtn" class="auto" type="button">Refresh</button><button id="ifaceTestBtn" class="secondary auto" type="button">Test SSH</button><button id="ifaceDisconnectBtn" class="secondary auto" type="button">Disconnect</button></div></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>MTU</th><th>Status</th><th>Action</th></tr></thead><tbody id="ifaceBody"></tbody></table></div></div>';
     App.el('ifaceRefreshBtn').onclick = function() { self.loadInterfaces(); };
     App.el('ifaceTestBtn').onclick = function() { self.testSsh(); };
     App.el('ifaceDisconnectBtn').onclick = function() { self.disconnect(); };
   },
   onEnter: function() {
-    if (this._ds) this._ds.refresh();
     if (App.state.selectedDevice) this.loadInterfaces();
   },
   onDeviceChanged: function(device) {
-    if (this._ds) this._ds.refresh();
     App.el('ifaceTitle').textContent = device ? 'Interfaces: ' + device.name : 'Interfaces';
     App.el('ifaceBody').innerHTML = '';
     this.setSshStatus('reconnect');
@@ -83,6 +79,8 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
           : (iface.running ? '<span class="badge ok">running</span>' : '<span class="badge warn">up/no-link</span>');
         tr.innerHTML = '<td><strong>' + iface.name + '</strong></td><td>' + (iface.type||'-') + '</td><td>' + (iface.mtu||'-') + '</td><td>' + badge + '</td><td></td>';
         var td = tr.querySelector('td:last-child');
+        var actions = document.createElement('div');
+        actions.className = 'iface-row-actions';
         var actBtn = document.createElement('button');
         actBtn.textContent = iface.disabled ? 'Enable' : 'Disable';
         actBtn.className = iface.disabled ? '' : 'danger';
@@ -92,12 +90,13 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
           await App.api('/api/devices/' + dev.id + '/interfaces/' + encodeURIComponent(iface.name), { method: 'POST', body: JSON.stringify({ disabled: !iface.disabled }) });
           self.loadInterfaces();
         };
-        td.appendChild(actBtn);
+        actions.appendChild(actBtn);
         var editBtn = document.createElement('button');
-        editBtn.textContent = 'Edit'; editBtn.className = 'secondary'; editBtn.style.marginTop = '6px';
+        editBtn.textContent = 'Edit'; editBtn.className = 'secondary';
         editBtn.disabled = !App.can('operator');
         editBtn.onclick = function() { self.openEdit(iface); };
-        td.appendChild(editBtn);
+        actions.appendChild(editBtn);
+        td.appendChild(actions);
         tbody.appendChild(tr);
       })(unique[i]);
     }
@@ -145,17 +144,21 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
 
 App.addPage('terminal', 'Terminal', '💻', {
   minRole: 'operator',
-  _ds: null,
+  _history: [],
+  _historyIndex: -1,
+  _historyDraft: '',
   init: function() {
     var self = this;
     var c = App.el('page-terminal');
-    c.innerHTML = '<div class="grid-2"><div class="card panel"><div class="device-selector" id="termDevSel"></div><div class="row"><h2 style="margin:0">Terminal</h2><button id="termClearBtn" class="secondary auto" type="button">Clear</button></div><textarea id="termInput" placeholder="Example: /interface print terse"></textarea><div class="row"><button id="termRunBtn" type="button">Run on selected</button><button id="termBroadcastPreview" class="secondary" type="button">Dry-run broadcast</button><button id="termBroadcastConfirm" class="success" type="button" disabled>Confirm broadcast</button></div><div id="termOutput" class="terminal"></div></div><div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">SSH Diagnostics</h2><button id="termRefreshDiag" class="secondary auto" type="button">Refresh</button></div><div class="diag-grid" id="termDiagGrid"><div class="diag-item"><div class="diag-label">Status</div><div class="diag-value" id="diagStatus">-</div></div><div class="diag-item"><div class="diag-label">RTT</div><div class="diag-value" id="diagRtt">-</div></div><div class="diag-item"><div class="diag-label">Reconnect Count</div><div class="diag-value" id="diagReconnect">-</div></div><div class="diag-item"><div class="diag-label">Queue Depth</div><div class="diag-value" id="diagQueue">-</div></div><div class="diag-item"><div class="diag-label">Last Error</div><div class="diag-value" id="diagError">-</div></div><div class="diag-item"><div class="diag-label">Last Success</div><div class="diag-value" id="diagSuccess">-</div></div></div></div></div></div>';
-    this._ds = App.buildDeviceSelector(App.el('termDevSel'));
+    c.innerHTML = '<div class="grid-2"><div class="card panel"><div class="row"><h2 style="margin:0">Terminal</h2><button id="termClearBtn" class="secondary auto" type="button">Clear</button></div><textarea id="termInput" placeholder="Example: /interface print terse"></textarea><div class="row"><button id="termRunBtn" type="button">Run on selected</button><button id="termBroadcastPreview" class="secondary" type="button">Dry-run broadcast</button><button id="termBroadcastConfirm" class="success" type="button" disabled>Confirm broadcast</button></div><div id="termOutput" class="terminal"></div></div><div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">SSH Diagnostics</h2><button id="termRefreshDiag" class="secondary auto" type="button">Refresh</button></div><div class="diag-grid" id="termDiagGrid"><div class="diag-item"><div class="diag-label">Status</div><div class="diag-value" id="diagStatus">-</div></div><div class="diag-item"><div class="diag-label">RTT</div><div class="diag-value" id="diagRtt">-</div></div><div class="diag-item"><div class="diag-label">Reconnect Count</div><div class="diag-value" id="diagReconnect">-</div></div><div class="diag-item"><div class="diag-label">Queue Depth</div><div class="diag-value" id="diagQueue">-</div></div><div class="diag-item"><div class="diag-label">Last Error</div><div class="diag-value" id="diagError">-</div></div><div class="diag-item"><div class="diag-label">Last Success</div><div class="diag-value" id="diagSuccess">-</div></div></div></div></div></div>';
     App.el('termClearBtn').onclick = function() { App.el('termOutput').innerHTML = ''; };
     App.el('termRunBtn').onclick = function() { self.runCommand(); };
     App.el('termBroadcastPreview').onclick = function() { self.broadcastPreview(); };
     App.el('termBroadcastConfirm').onclick = function() { self.broadcastConfirm(); };
     App.el('termRefreshDiag').onclick = function() { self.loadDiagnostics(); };
+    App.el('termInput').addEventListener('keydown', function(e) {
+      self.onTerminalKeydown(e);
+    });
     App.el('termInput').addEventListener('input', function() {
       if (App.state.pendingBroadcast) {
         App.state.pendingBroadcast = null;
@@ -164,13 +167,56 @@ App.addPage('terminal', 'Terminal', '💻', {
     });
   },
   onEnter: function() {
-    if (this._ds) this._ds.refresh();
     if (App.state.selectedDevice) this.loadDiagnostics();
   },
   onDeviceChanged: function(device) {
-    if (this._ds) this._ds.refresh();
     this.resetDiag();
     if (device) this.loadDiagnostics();
+  },
+  onTerminalKeydown: function(e) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    var input = App.el('termInput');
+    if (!input) return;
+
+    var value = input.value;
+    var pos = input.selectionStart;
+    var firstLine = value.lastIndexOf('\n', Math.max(0, pos - 1)) === -1;
+    var nextBreak = value.indexOf('\n', pos);
+    var lastLine = nextBreak === -1;
+
+    if (e.key === 'ArrowUp' && !firstLine) return;
+    if (e.key === 'ArrowDown' && !lastLine) return;
+    if (!this._history.length) return;
+
+    e.preventDefault();
+    if (this._historyIndex === -1) {
+      this._historyDraft = input.value;
+      this._historyIndex = this._history.length;
+    }
+
+    if (e.key === 'ArrowUp') {
+      if (this._historyIndex > 0) this._historyIndex -= 1;
+    } else if (e.key === 'ArrowDown') {
+      if (this._historyIndex < this._history.length) this._historyIndex += 1;
+    }
+
+    if (this._historyIndex >= this._history.length) {
+      input.value = this._historyDraft;
+      this._historyIndex = -1;
+    } else {
+      input.value = this._history[this._historyIndex] || '';
+    }
+    input.selectionStart = input.selectionEnd = input.value.length;
+  },
+  pushHistory: function(command) {
+    var cmd = String(command || '').trim();
+    if (!cmd) return;
+    if (!this._history.length || this._history[this._history.length - 1] !== cmd) {
+      this._history.push(cmd);
+    }
+    if (this._history.length > 200) this._history.shift();
+    this._historyIndex = -1;
+    this._historyDraft = '';
   },
   termWrite: function(line, isError) {
     var stamp = new Date().toLocaleTimeString();
@@ -204,6 +250,7 @@ App.addPage('terminal', 'Terminal', '💻', {
     if (!dev) return App.status('Select a device');
     var command = App.el('termInput').value.trim();
     if (!command) return App.status('Enter a command');
+    this.pushHistory(command);
     this.termWrite('> [' + dev.name + '] ' + command);
     try {
       var out = await App.api('/api/devices/' + dev.id + '/terminal', { method: 'POST', body: JSON.stringify({ command: command }) });
@@ -214,6 +261,7 @@ App.addPage('terminal', 'Terminal', '💻', {
   broadcastPreview: async function() {
     var command = App.el('termInput').value.trim();
     if (!command) return App.status('Enter a command');
+    this.pushHistory(command);
     try {
       var out = await App.api('/api/terminal/broadcast/preview', { method: 'POST', body: JSON.stringify({ command: command }) });
       App.state.pendingBroadcast = { command: command, token: out.confirm_token, expiresIn: out.confirm_ttl_seconds, targets: out.targets || [] };
@@ -243,12 +291,10 @@ App.addPage('terminal', 'Terminal', '💻', {
 });
 
 App.addPage('backups', 'Backups', '💾', {
-  _ds: null,
   init: function() {
     var self = this;
     var c = App.el('page-backups');
-    c.innerHTML = '<div class="card panel"><div class="device-selector" id="backupDevSel"></div><div class="row"><h2 style="margin:0">Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div>';
-    this._ds = App.buildDeviceSelector(App.el('backupDevSel'));
+    c.innerHTML = '<div class="card panel"><div class="row"><h2 style="margin:0">Backups</h2><button id="backupCaptureBtn" class="auto" type="button">Create Backup</button><button id="backupRefreshBtn" class="secondary auto" type="button">Refresh</button></div><div class="row" style="margin-top:8px"><input id="backupUploadFile" type="file" accept=".rsc,.txt" /><button id="backupUploadBtn" class="secondary auto" type="button">Upload</button></div><div id="backupList" class="backup-list" style="margin-top:10px"></div></div>';
     App.el('backupRefreshBtn').onclick = function() { self.loadBackups(); };
     App.el('backupCaptureBtn').onclick = function() { self.capture(); };
     App.el('backupUploadBtn').onclick = function() { self.upload(); };
@@ -257,8 +303,8 @@ App.addPage('backups', 'Backups', '💾', {
       App.el('backupUploadBtn').disabled = true;
     }
   },
-  onEnter: function() { if (this._ds) this._ds.refresh(); if (App.state.selectedDevice) this.loadBackups(); },
-  onDeviceChanged: function(device) { if (this._ds) this._ds.refresh(); App.el('backupList').innerHTML = ''; if (device) this.loadBackups(); },
+  onEnter: function() { if (App.state.selectedDevice) this.loadBackups(); },
+  onDeviceChanged: function(device) { App.el('backupList').innerHTML = ''; if (device) this.loadBackups(); },
   loadBackups: async function() {
     var dev = App.state.selectedDevice; if (!dev) return;
     try { var items = await App.api('/api/devices/' + dev.id + '/backups'); this.renderBackups(items); }
