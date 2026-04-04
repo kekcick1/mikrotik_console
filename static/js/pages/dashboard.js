@@ -1,6 +1,8 @@
 App.addPage('dashboard', 'Dashboard', '📊', {
   _connectTicker: null,
   _connectStatusPoller: null,
+  _dashboardAutoTimer: null,
+  _dashboardAutoBusy: false,
   _manualConnected: {},
   _routerLogsCache: {},
   init: function() {
@@ -41,6 +43,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     };
   },
   onEnter: async function() {
+    this.startDashboardAutoRefresh();
     this.renderStats();
     this.renderConnectionState();
     await this.loadRouterLogs();
@@ -50,6 +53,21 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     this.renderStats();
     this.renderConnectionState();
     this.loadRouterLogs();
+  },
+  startDashboardAutoRefresh: function() {
+    var self = this;
+    if (self._dashboardAutoTimer) return;
+    self._dashboardAutoTimer = setInterval(function() {
+      var page = App.el('page-dashboard');
+      if (!page || !page.classList.contains('active')) return;
+      if (self._dashboardAutoBusy) return;
+      self._dashboardAutoBusy = true;
+      Promise.resolve()
+        .then(function() { return self.loadSystemMetrics(); })
+        .then(function() { return self.loadRouterLogs(); })
+        .catch(function() {})
+        .finally(function() { self._dashboardAutoBusy = false; });
+    }, 5000);
   },
   renderStats: function() {
     var el = App.el('dashStats');
@@ -226,6 +244,9 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         body: JSON.stringify({ command: '/log print without-paging' }),
       });
       var text = (out && out.output ? String(out.output) : '').trim();
+      // Render newest entries at the bottom so reading direction is natural.
+      var lines = text ? text.split(/\r?\n/) : [];
+      if (lines.length > 1) text = lines.reverse().join('\n');
       el.textContent = text || 'No router logs available.';
       this._routerLogsCache[dev.id] = el.textContent;
       // Keep the latest log lines visible without manual scrolling.

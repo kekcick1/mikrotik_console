@@ -79,7 +79,10 @@ const App = (() => {
     document.querySelectorAll('.device-select-dropdown').forEach(function(sel) { sel.value = device ? device.id : ''; });
     if (state.globalSelector && state.globalSelector.refresh) state.globalSelector.refresh();
     for (var i = 0; i < pages.length; i++) {
-      if (pages[i].onDeviceChanged) pages[i].onDeviceChanged(device);
+      if (!pages[i].onDeviceChanged) continue;
+      var section = el('page-' + pages[i].id);
+      // Avoid side effects (SSH/API calls) from inactive pages on global device switch.
+      if (section && section.classList.contains('active')) pages[i].onDeviceChanged(device);
     }
   }
 
