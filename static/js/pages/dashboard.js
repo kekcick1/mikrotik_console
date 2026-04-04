@@ -63,11 +63,20 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       if (self._dashboardAutoBusy) return;
       self._dashboardAutoBusy = true;
       Promise.resolve()
-        .then(function() { return self.loadSystemMetrics(); })
-        .then(function() { return self.loadRouterLogs(); })
+        .then(function() { return self.refreshConnectedDeviceStatuses(); })
         .catch(function() {})
         .finally(function() { self._dashboardAutoBusy = false; });
     }, 5000);
+  },
+  refreshConnectedDeviceStatuses: async function() {
+    var connectedIds = Object.keys(this._manualConnected || {});
+    if (!connectedIds.length) return;
+    var items = await App.api('/api/devices/status-overview');
+    for (var i = 0; i < connectedIds.length; i++) {
+      var id = Number(connectedIds[i]);
+      var row = items.find(function(x) { return Number(x.id) === id; });
+      if (row) this.applyStatusToExistingCard(row);
+    }
   },
   renderStats: function() {
     var el = App.el('dashStats');
@@ -304,10 +313,12 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         title.textContent = d.name;
         var chip = document.createElement('span');
         chip.className = 'dev-status-chip ' + (isActive ? 'active' : (hasError ? 'error' : 'idle'));
+        chip.dataset.role = 'status-chip';
         chip.textContent = statusTxt;
         var connectBtn = document.createElement('button');
         connectBtn.className = 'secondary';
         connectBtn.textContent = isActive ? 'Retest' : 'Connect';
+        connectBtn.dataset.role = 'connect-btn';
         connectBtn.type = 'button';
         connectBtn.onclick = async function(e) {
           e.stopPropagation();
@@ -324,6 +335,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         var disconnectBtn = document.createElement('button');
         disconnectBtn.className = 'secondary';
         disconnectBtn.textContent = 'Disconnect';
+        disconnectBtn.dataset.role = 'disconnect-btn';
         disconnectBtn.type = 'button';
         disconnectBtn.disabled = !App.can('operator');
         disconnectBtn.onclick = async function(e) {
@@ -344,18 +356,22 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         var meta = document.createElement('div');
         meta.className = 'dev-status-meta';
         meta.innerHTML =
-          '<div>Host<strong>' + d.host + ':' + d.port + '</strong></div>' +
-          '<div>Uptime<strong>' + uptimeTxt + '</strong></div>' +
-          '<div>Idle<strong>' + idleTxt + '</strong></div>' +
-          '<div>Reconnects<strong>' + (d.reconnect_count != null ? d.reconnect_count : '-') + '</strong></div>';
+          '<div>Host<strong data-role="host">' + d.host + ':' + d.port + '</strong></div>' +
+          '<div>Uptime<strong data-role="uptime">' + uptimeTxt + '</strong></div>' +
+          '<div>Idle<strong data-role="idle">' + idleTxt + '</strong></div>' +
+          '<div>Reconnects<strong data-role="reconnects">' + (d.reconnect_count != null ? d.reconnect_count : '-') + '</strong></div>';
         main.appendChild(meta);
+        var err = document.createElement('div');
+        err.className = 'dev-status-error';
+        err.dataset.role = 'status-error';
         if (d.last_error) {
-          var err = document.createElement('div');
-          err.className = 'dev-status-error';
           err.title = d.last_error;
           err.textContent = 'Error: ' + d.last_error;
-          main.appendChild(err);
+        } else {
+          err.textContent = '';
+          err.style.display = 'none';
         }
+        main.appendChild(err);
         var actions = document.createElement('div');
         actions.className = 'dev-status-actions';
         actions.appendChild(connectBtn);
@@ -370,5 +386,48 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         grid.appendChild(card);
       })(items[i]);
     }
+  },
+  applyStatusToExistingCard: function(d) {
+    var card = document.querySelector('.dev-status-card[data-device-id="' + d.id + '"]');
+    if (!card) return;
+
+    var isActive = d.status === 'active';
+    var hasError = !isActive && d.last_error;
+    var isSelected = App.state.selectedDevice && App.state.selectedDevice.id === d.id;
+    card.classList.toggle('active', !!isActive);
+    card.classList.toggle('error', !!hasError);
+    card.classList.toggle('selected', !!isSelected);
+
+    var chip = card.querySelector('[data-role="status-chip"]');
+    if (chip) {
+      chip.classList.remove('active', 'error', 'idle');
+      chip.classList.add(isActive ? 'active' : (hasError ? 'error' : 'idle'));
+      chip.textContent = isActive ? 'Connected' : (hasError ? 'Error' : 'Not connected');
+    }
+
+    var idle = card.querySelector('[data-role="idle"]');
+    if (idle) idle.textContent = (isActive && d.idle_seconds != null) ? (d.idle_seconds + 's') : '-';
+
+    var uptime = card.querySelector('[data-role="uptime"]');
+    if (uptime) uptime.textContent = d.uptime || '-';
+
+    var reconnects = card.querySelector('[data-role="reconnects"]');
+    if (reconnects) reconnects.textContent = d.reconnect_count != null ? d.reconnect_count : '-';
+
+    var err = card.querySelector('[data-role="status-error"]');
+    if (err) {
+      if (d.last_error) {
+        err.style.display = '';
+        err.title = d.last_error;
+        err.textContent = 'Error: ' + d.last_error;
+      } else {
+        err.style.display = 'none';
+        err.textContent = '';
+        err.title = '';
+      }
+    }
+
+    var connectBtn = card.querySelector('[data-role="connect-btn"]');
+    if (connectBtn) connectBtn.textContent = isActive ? 'Retest' : 'Connect';
   },
 });
