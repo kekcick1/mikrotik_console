@@ -56,6 +56,8 @@ DEVICE_QUEUES_LOCK = threading.Lock()
 DEVICE_QUEUES: dict[str, dict] = {}
 SSH_DIAG_LOCK = threading.Lock()
 SSH_DIAG: dict[str, dict] = {}
+DEVICE_PROFILE_LOCK = threading.Lock()
+DEVICE_PROFILE: dict[str, dict] = {}
 
 if not SECRET:
     raise RuntimeError("MIM_SECRET is required")
@@ -208,6 +210,10 @@ def init_db() -> None:
         device_cols = {row[1] for row in conn.execute("PRAGMA table_info(devices)").fetchall()}
         if "owner_id" not in device_cols:
             conn.execute("ALTER TABLE devices ADD COLUMN owner_id INTEGER")
+        if "ros_version" not in device_cols:
+            conn.execute("ALTER TABLE devices ADD COLUMN ros_version TEXT")
+        if "ros_version_checked_at" not in device_cols:
+            conn.execute("ALTER TABLE devices ADD COLUMN ros_version_checked_at TEXT")
 
         conn.commit()
 
@@ -605,6 +611,203 @@ def safe_ssh_exec(host: str, port: int, username: str, password: str, command: s
     except OSError as e:
         _diag_mark_error(_device_key(host, port), str(e))
         raise HTTPException(status_code=400, detail=f"Network error while connecting to {host}:{port}: {e}")
+
+
+def _is_compat_error_detail(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(
+        x in t
+        for x in [
+            "expected end of command",
+            "syntax error",
+            "input does not match any value",
+            "bad command name",
+            "no such command",
+            "unknown command",
+        ]
+    )
+
+
+def _looks_like_command_error_output(text: str) -> bool:
+    if not text:
+        return False
+    lines = [ln.strip().lower() for ln in str(text).splitlines() if ln.strip()]
+    if not lines:
+        return False
+    first = lines[0]
+    return (
+        first.startswith("failure:")
+        or "expected end of command" in first
+        or "input does not match any value" in first
+        or "bad command name" in first
+        or "unknown command" in first
+        or first.startswith("syntax error")
+    )
+
+
+def _extract_ros_version(text: str) -> str | None:
+    content = text or ""
+    m = re.search(r"version\s*[:=]\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)", content, flags=re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b", content)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _ros_major(version: str | None) -> int | None:
+    if not version:
+        return None
+    try:
+        return int(str(version).split(".", 1)[0])
+    except Exception:
+        return None
+
+
+def set_device_ros_version(device_id: int, version: str | None) -> None:
+    ts = datetime.utcnow().isoformat() + "Z"
+    with closing(db_conn()) as conn:
+        conn.execute(
+            "UPDATE devices SET ros_version = ?, ros_version_checked_at = ? WHERE id = ?",
+            (version, ts, device_id),
+        )
+        conn.commit()
+
+
+def detect_ros_version(host: str, port: int, username: str, password: str) -> str | None:
+    candidates = [
+        "/system resource get version",
+        ":put [/system resource get version]",
+        "/system package update get installed-version",
+        "/system resource print without-paging",
+        "/system resource print",
+    ]
+    for cmd in candidates:
+        try:
+            out = safe_ssh_exec(host, port, username, password, cmd)
+        except HTTPException:
+            continue
+        except Exception:
+            continue
+        ver = _extract_ros_version(out)
+        if ver:
+            return ver
+    return None
+
+
+def _feature_command_candidates(feature: str, major: int | None) -> list[str]:
+    if feature == "backup_export":
+        if major and major >= 7:
+            return [
+                "/export show-sensitive terse",
+                "/export terse show-sensitive",
+                "/export terse",
+                "/export compact",
+            ]
+        return [
+            "/export terse show-sensitive",
+            "/export show-sensitive terse",
+            "/export terse",
+            "/export compact",
+        ]
+    if feature == "interfaces_list":
+        return [
+            "/interface print detail terse without-paging",
+            "/interface print terse without-paging",
+            "/interface print without-paging",
+        ]
+    if feature == "logs_read":
+        return [
+            "/log print without-paging",
+            "/log print",
+        ]
+    if feature == "resource_print":
+        return [
+            "/system resource print without-paging",
+            "/system resource print",
+        ]
+    if feature == "identity_print":
+        return [
+            "/system identity print without-paging",
+            "/system identity print",
+        ]
+    return []
+
+
+def exec_feature_command(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    feature: str,
+    device_id: int | None = None,
+) -> dict:
+    dkey = _device_key(host, port)
+    with DEVICE_PROFILE_LOCK:
+        profile = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}})
+
+    version = profile.get("version")
+    if not version:
+        version = detect_ros_version(host, port, username, password)
+        major = _ros_major(version)
+        with DEVICE_PROFILE_LOCK:
+            profile = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}})
+            profile["version"] = version
+            profile["major"] = major
+            profile.setdefault("commands", {})
+            DEVICE_PROFILE[dkey] = profile
+        if device_id:
+            set_device_ros_version(device_id, version)
+    else:
+        major = profile.get("major")
+
+    candidates = _feature_command_candidates(feature, major)
+    preferred = profile.get("commands", {}).get(feature)
+    if preferred and preferred in candidates:
+        candidates = [preferred] + [x for x in candidates if x != preferred]
+
+    last_error = None
+    for cmd in candidates:
+        try:
+            out = safe_ssh_exec(host, port, username, password, cmd)
+        except HTTPException as e:
+            detail = str(e.detail)
+            last_error = detail
+            if _is_compat_error_detail(detail):
+                continue
+            raise
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+        # Router logs are free-form text and can legitimately contain words like "failure".
+        # Treat non-empty output for logs_read as successful execution.
+        if feature == "logs_read" and (out or "").strip():
+            pass
+        elif _looks_like_command_error_output(out):
+            last_error = out[:400]
+            continue
+
+        with DEVICE_PROFILE_LOCK:
+            p = DEVICE_PROFILE.get(dkey, {"version": version, "major": major, "commands": {}})
+            p.setdefault("commands", {})
+            p["commands"][feature] = cmd
+            p["version"] = version
+            p["major"] = major
+            DEVICE_PROFILE[dkey] = p
+
+        if device_id:
+            set_device_ros_version(device_id, version)
+
+        return {"ok": True, "command": cmd, "output": out, "version": version}
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Feature '{feature}' is not supported on this RouterOS version/device. Last error: {last_error or 'unknown'}",
+    )
 
 
 def load_device(device_id: int, actor: sqlite3.Row | None = None) -> sqlite3.Row:

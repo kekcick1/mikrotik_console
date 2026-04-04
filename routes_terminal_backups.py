@@ -123,17 +123,20 @@ def register_terminal_backup_routes(app, ctx) -> None:
         actor = ctx.require_role(request, "operator")
         row = ctx.load_device(device_id, actor)
         password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
-        content = ctx.safe_ssh_exec(
+        out = ctx.exec_feature_command(
             row["host"],
             row["port"],
             row["username"],
             password,
-            "/export terse show-sensitive",
+            "backup_export",
+            int(row["id"]),
         )
+        content = out.get("output", "")
         if re.search(r"expected end of command|syntax error|input does not match any value", content, re.IGNORECASE):
             raise HTTPException(status_code=400, detail=f"Backup export failed: {content[:300]}")
         backup = ctx.save_backup(device_id, f"{row['name']}_export", content)
-        ctx.log_audit(actor["username"], actor["role"], "backup_capture", device_id, backup["name"])
+        cmd = out.get("command", "")
+        ctx.log_audit(actor["username"], actor["role"], "backup_capture", device_id, f"{backup['name']} via {cmd}")
         return {"ok": True, "backup": {"id": backup["id"], "name": backup["name"]}}
 
     @app.post("/api/devices/{device_id}/backups/upload")

@@ -248,10 +248,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
 
     el.textContent = 'Loading router logs...';
     try {
-      var out = await App.api('/api/devices/' + dev.id + '/terminal', {
-        method: 'POST',
-        body: JSON.stringify({ command: '/log print without-paging' }),
-      });
+      var out = await App.api('/api/devices/' + dev.id + '/router-logs');
       var text = (out && out.output ? String(out.output) : '').trim();
       el.textContent = text || 'No router logs available.';
       this._routerLogsCache[dev.id] = el.textContent;
@@ -301,6 +298,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         var statusTxt = isActive ? 'Connected' : (hasError ? 'Error' : 'Not connected');
         var idleTxt = isActive && d.idle_seconds != null ? (d.idle_seconds + 's') : '-';
         var uptimeTxt = d.uptime || '-';
+        var rosTxt = d.ros_version || '-';
         var main = document.createElement('div');
         main.className = 'dev-status-main';
         var head = document.createElement('div');
@@ -355,6 +353,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         meta.innerHTML =
           '<div>Host<strong data-role="host">' + d.host + ':' + d.port + '</strong></div>' +
           '<div>Uptime<strong data-role="uptime">' + uptimeTxt + '</strong></div>' +
+          '<div>RouterOS<strong data-role="ros-version">' + rosTxt + '</strong></div>' +
           '<div>Idle<strong data-role="idle">' + idleTxt + '</strong></div>' +
           '<div>Reconnects<strong data-role="reconnects">' + (d.reconnect_count != null ? d.reconnect_count : '-') + '</strong></div>';
         main.appendChild(meta);
@@ -407,6 +406,9 @@ App.addPage('dashboard', 'Dashboard', '📊', {
 
     var uptime = card.querySelector('[data-role="uptime"]');
     if (uptime) uptime.textContent = d.uptime || '-';
+
+    var ros = card.querySelector('[data-role="ros-version"]');
+    if (ros) ros.textContent = d.ros_version || '-';
 
     var reconnects = card.querySelector('[data-role="reconnects"]');
     if (reconnects) reconnects.textContent = d.reconnect_count != null ? d.reconnect_count : '-';

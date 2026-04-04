@@ -150,7 +150,7 @@ App.addPage('terminal', 'Terminal', '💻', {
   init: function() {
     var self = this;
     var c = App.el('page-terminal');
-    c.innerHTML = '<div class="grid-2"><div class="card panel"><div class="row"><h2 style="margin:0">Terminal</h2><button id="termClearBtn" class="secondary auto" type="button">Clear</button></div><textarea id="termInput" placeholder="Example: /interface print terse"></textarea><div class="row"><button id="termRunBtn" type="button">Run on selected</button><button id="termBroadcastPreview" class="secondary" type="button">Dry-run broadcast</button><button id="termBroadcastConfirm" class="success" type="button" disabled>Confirm broadcast</button></div><div id="termOutput" class="terminal"></div></div><div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">SSH Diagnostics</h2><button id="termRefreshDiag" class="secondary auto" type="button">Refresh</button></div><div class="diag-grid" id="termDiagGrid"><div class="diag-item"><div class="diag-label">Status</div><div class="diag-value" id="diagStatus">-</div></div><div class="diag-item"><div class="diag-label">RTT</div><div class="diag-value" id="diagRtt">-</div></div><div class="diag-item"><div class="diag-label">Reconnect Count</div><div class="diag-value" id="diagReconnect">-</div></div><div class="diag-item"><div class="diag-label">Queue Depth</div><div class="diag-value" id="diagQueue">-</div></div><div class="diag-item"><div class="diag-label">Last Error</div><div class="diag-value" id="diagError">-</div></div><div class="diag-item"><div class="diag-label">Last Success</div><div class="diag-value" id="diagSuccess">-</div></div></div></div></div></div>';
+    c.innerHTML = '<div class="grid-2"><div class="card panel"><div class="row"><h2 style="margin:0">Terminal</h2><button id="termClearBtn" class="secondary auto" type="button">Clear</button></div><textarea id="termInput" placeholder="Example: /interface print terse"></textarea><div class="row"><button id="termRunBtn" type="button">Run on selected</button><button id="termBroadcastPreview" class="secondary" type="button">Dry-run broadcast</button><button id="termBroadcastConfirm" class="success" type="button" disabled>Confirm broadcast</button></div><div id="termOutput" class="terminal"></div></div><div class="stack"><div class="card panel"><div class="row"><h2 style="margin:0">SSH Diagnostics</h2><button id="termRefreshDiag" class="secondary auto" type="button">Refresh</button></div><div class="diag-grid" id="termDiagGrid"><div class="diag-item"><div class="diag-label">Status</div><div class="diag-value" id="diagStatus">-</div></div><div class="diag-item"><div class="diag-label">RouterOS</div><div class="diag-value" id="diagRos">-</div></div><div class="diag-item"><div class="diag-label">RTT</div><div class="diag-value" id="diagRtt">-</div></div><div class="diag-item"><div class="diag-label">Reconnect Count</div><div class="diag-value" id="diagReconnect">-</div></div><div class="diag-item"><div class="diag-label">Queue Depth</div><div class="diag-value" id="diagQueue">-</div></div><div class="diag-item"><div class="diag-label">Last Error</div><div class="diag-value" id="diagError">-</div></div><div class="diag-item"><div class="diag-label">Last Success</div><div class="diag-value" id="diagSuccess">-</div></div></div></div></div></div>';
     App.el('termClearBtn').onclick = function() { App.el('termOutput').innerHTML = ''; };
     App.el('termRunBtn').onclick = function() { self.runCommand(); };
     App.el('termBroadcastPreview').onclick = function() { self.broadcastPreview(); };
@@ -171,6 +171,8 @@ App.addPage('terminal', 'Terminal', '💻', {
   },
   onDeviceChanged: function(device) {
     this.resetDiag();
+    var rosEl = App.el('diagRos');
+    if (rosEl) rosEl.textContent = (device && device.ros_version) ? device.ros_version : '-';
     if (device) this.loadDiagnostics();
   },
   onTerminalKeydown: function(e) {
@@ -228,7 +230,7 @@ App.addPage('terminal', 'Terminal', '💻', {
     out.scrollTop = out.scrollHeight;
   },
   resetDiag: function() {
-    ['diagStatus','diagRtt','diagReconnect','diagQueue','diagError','diagSuccess'].forEach(function(id) {
+    ['diagStatus','diagRos','diagRtt','diagReconnect','diagQueue','diagError','diagSuccess'].forEach(function(id) {
       var e = App.el(id); if (e) e.textContent = '-';
     });
   },
@@ -238,6 +240,7 @@ App.addPage('terminal', 'Terminal', '💻', {
     try {
       var d = await App.api('/api/devices/' + dev.id + '/ssh-diagnostics');
       App.el('diagStatus').textContent = d.status || '-';
+      App.el('diagRos').textContent = d.ros_version || (dev.ros_version || '-');
       App.el('diagRtt').textContent = typeof d.rtt_ms === 'number' ? d.rtt_ms + ' ms' : '-';
       App.el('diagReconnect').textContent = '' + (d.reconnect_count || 0);
       App.el('diagQueue').textContent = '' + (d.queue_depth || 0);
