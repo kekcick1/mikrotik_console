@@ -1,12 +1,18 @@
 App.addPage('dashboard', 'Dashboard', '📊', {
   _connectTicker: null,
   _connectStatusPoller: null,
-  _dashboardAutoTimer: null,
-  _dashboardAutoBusy: false,
+  _statusUnsubscribe: null,
+  _liveSummary: null,
+  _liveItems: [],
+  _healthWorkerEnabled: null,
   _manualConnected: {},
   _routerLogsCache: {},
   _lastStatusCache: {},
   init: function() {
+    this._statusUnsubscribe = null;
+    this._liveSummary = null;
+    this._liveItems = [];
+    this._healthWorkerEnabled = null;
     this._manualConnected = {};
     this._routerLogsCache = {};
     this._lastStatusCache = {};
@@ -15,10 +21,11 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     var insights = document.createElement('div');
     insights.className = 'card panel';
     insights.style.marginTop = '14px';
-    insights.innerHTML = '<div class="row"><h2 style="margin:0">Device Status</h2><button id="dashRefreshMetrics" class="secondary auto" type="button">Refresh</button></div><div class="stats-row" id="dashSysStats" style="margin-top:8px"></div><div id="dashDevStatusGrid" class="dev-status-grid" style="margin-top:10px"></div>';
+    insights.innerHTML = '<div class="row"><h2 style="margin:0">Device Status</h2><span id="dashHealthWorkerState" class="muted auto"></span><button id="dashToggleHealthWorker" class="secondary auto" type="button">Auto Check</button><button id="dashRefreshMetrics" class="secondary auto" type="button">Refresh</button></div><div class="stats-row" id="dashSysStats" style="margin-top:8px"></div><div id="dashDevStatusGrid" class="dev-status-grid" style="margin-top:10px"></div>';
     c.appendChild(insights);
     App.el('dashRefreshRouterLogs').onclick = this.loadRouterLogs.bind(this);
     App.el('dashRefreshMetrics').onclick = this.loadSystemMetrics.bind(this);
+    App.el('dashToggleHealthWorker').onclick = this.toggleHealthWorker.bind(this);
     App.el('dashReloadDevices').onclick = async function() {
       await App.loadDevices();
       var p = App.pages.find(function(x) { return x.id === 'dashboard'; });
@@ -46,9 +53,10 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     };
   },
   onEnter: async function() {
-    this.startDashboardAutoRefresh();
+    this.ensureStatusSubscription();
     this.renderStats();
     this.renderConnectionState();
+    await this.loadHealthWorkerRuntime();
     await this.loadRouterLogs();
     await this.loadSystemMetrics();
   },
@@ -57,27 +65,42 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     this.renderConnectionState();
     this.loadRouterLogs();
   },
-  startDashboardAutoRefresh: function() {
+  ensureStatusSubscription: function() {
     var self = this;
-    if (self._dashboardAutoTimer) return;
-    self._dashboardAutoTimer = setInterval(function() {
-      var page = App.el('page-dashboard');
-      if (!page || !page.classList.contains('active')) return;
-      if (self._dashboardAutoBusy) return;
-      self._dashboardAutoBusy = true;
-      Promise.resolve()
-        .then(function() { return self.refreshConnectedDeviceStatuses(); })
-        .catch(function() {})
-        .finally(function() { self._dashboardAutoBusy = false; });
-    }, 5000);
+    if (self._statusUnsubscribe) return;
+    self._statusUnsubscribe = App.subscribeStatusStream(function(payload) {
+      self.onStatusStreamPayload(payload);
+    });
+  },
+  onStatusStreamPayload: function(payload) {
+    if (!payload || !Array.isArray(payload.items)) return;
+    this._liveItems = payload.items.slice();
+    this._liveSummary = payload.summary || null;
+
+    var page = App.el('page-dashboard');
+    if (!page || !page.classList.contains('active')) return;
+
+    var incoming = payload.items.map(this.mergeWithCachedStatus.bind(this));
+    this.renderDeviceStatuses(incoming);
+    if (payload.summary) {
+      this.renderSystemSummary(payload.summary);
+    }
   },
   refreshConnectedDeviceStatuses: async function() {
+    if (!this._liveItems.length) {
+      try {
+        var items = await App.api('/api/devices/status-overview?lite=1');
+        for (var i = 0; i < items.length; i++) {
+          this.applyStatusToExistingCard(this.mergeWithCachedStatus(items[i]));
+        }
+      } catch (_) {}
+      return;
+    }
     var connectedIds = Object.keys(this._manualConnected || {});
     if (!connectedIds.length) return;
-    var items = await App.api('/api/devices/status-overview?lite=1');
-    for (var i = 0; i < connectedIds.length; i++) {
-      var id = Number(connectedIds[i]);
-      var row = items.find(function(x) { return Number(x.id) === id; });
+    for (var j = 0; j < connectedIds.length; j++) {
+      var id = Number(connectedIds[j]);
+      var row = this._liveItems.find(function(x) { return Number(x.id) === id; });
       if (row) this.applyStatusToExistingCard(this.mergeWithCachedStatus(row));
     }
   },
@@ -130,6 +153,55 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     s.textContent = 'Selected: ' + App.state.selectedDevice.name + ' (' + App.state.selectedDevice.host + ':' + App.state.selectedDevice.port + ')';
     s.style.color = 'var(--muted)';
   },
+  renderHealthWorkerControls: function(runtime) {
+    var stateEl = App.el('dashHealthWorkerState');
+    var toggleBtn = App.el('dashToggleHealthWorker');
+    if (!stateEl || !toggleBtn) return;
+
+    if (!runtime) {
+      stateEl.textContent = 'Auto check: unavailable';
+      toggleBtn.disabled = true;
+      toggleBtn.textContent = 'Auto Check';
+      return;
+    }
+
+    this._healthWorkerEnabled = !!runtime.enabled;
+    stateEl.textContent = 'Auto check: ' + (runtime.enabled ? 'ON' : 'OFF') + ' • every ' + runtime.interval_seconds + 's';
+    toggleBtn.textContent = runtime.enabled ? 'Disable Auto Check' : 'Enable Auto Check';
+    toggleBtn.disabled = !App.can('admin');
+  },
+  loadHealthWorkerRuntime: async function() {
+    try {
+      var runtime = await App.api('/api/system/health-worker');
+      this.renderHealthWorkerControls(runtime);
+    } catch (e) {
+      var stateEl = App.el('dashHealthWorkerState');
+      var toggleBtn = App.el('dashToggleHealthWorker');
+      if (stateEl) stateEl.textContent = 'Auto check: unavailable';
+      if (toggleBtn) toggleBtn.disabled = true;
+    }
+  },
+  toggleHealthWorker: async function() {
+    if (!App.can('admin')) return App.status('Only admin can toggle auto status check', true);
+    if (this._healthWorkerEnabled == null) await this.loadHealthWorkerRuntime();
+    var next = !(this._healthWorkerEnabled === true);
+    var toggleBtn = App.el('dashToggleHealthWorker');
+    if (toggleBtn) toggleBtn.disabled = true;
+    try {
+      var runtime = await App.api('/api/system/health-worker', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: next }),
+      });
+      this.renderHealthWorkerControls(runtime);
+      App.status('Auto status check ' + (runtime.enabled ? 'enabled' : 'disabled'));
+    } catch (e) {
+      App.status(e.message, true);
+      await this.loadHealthWorkerRuntime();
+    } finally {
+      var btn = App.el('dashToggleHealthWorker');
+      if (btn) btn.disabled = !App.can('admin');
+    }
+  },
   setSelectedDashboardDevice: function(device) {
     if (!device) return null;
     App.selectDevice(device);
@@ -176,12 +248,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     }
   },
   startConnectStatusPolling: function() {
-    var self = this;
-    self.stopConnectStatusPolling();
-    // Keep status cards fresh with lightweight polling while connect/test runs.
-    self._connectStatusPoller = setInterval(function() {
-      self.refreshConnectedDeviceStatuses().catch(function() {});
-    }, 5000);
+    this.stopConnectStatusPolling();
   },
   stopConnectStatusPolling: function() {
     if (this._connectStatusPoller) {
@@ -343,29 +410,51 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     try {
       var items = await App.api('/api/devices/status-overview');
       items = items.map(function(x) { return self.mergeWithCachedStatus(x); });
-      var activeCount = items.filter(function(d) { return d.status === 'active'; }).length;
-      var errCount = items.filter(function(d) { return d.last_error; }).length;
-      App.clearNode(stats);
-
-      function appendStatCard(value, label, borderColor, valueColor) {
-        var card = App.createEl('div', { className: 'stat-card' });
-        if (borderColor) card.style.borderColor = borderColor;
-        var valueEl = App.createEl('div', { className: 'stat-value', text: value });
-        if (valueColor) valueEl.style.color = valueColor;
-        card.appendChild(valueEl);
-        card.appendChild(App.createEl('div', { className: 'stat-label', text: label }));
-        stats.appendChild(card);
-      }
-
-      appendStatCard(items.length, 'Devices');
-      appendStatCard(activeCount, 'Active SSH', 'color-mix(in srgb, var(--ok) 50%, var(--line))', 'var(--ok)');
-      appendStatCard(errCount, 'Have Errors', errCount ? 'color-mix(in srgb, var(--bad) 50%, var(--line))' : 'color-mix(in srgb, var(--line) 100%, transparent)', errCount ? 'var(--bad)' : 'var(--muted)');
+      var summary = {
+        devices_total: items.length,
+        active_sessions: items.filter(function(d) { return (d.session_state || d.status) === 'active'; }).length,
+        online: items.filter(function(d) { return d.health_state === 'online'; }).length,
+        degraded: items.filter(function(d) { return d.health_state === 'degraded'; }).length,
+        offline: items.filter(function(d) { return d.health_state === 'offline'; }).length,
+        unknown: items.filter(function(d) { return d.health_state === 'unknown'; }).length,
+        stale: items.filter(function(d) { return !!d.stale; }).length,
+        errors: items.filter(function(d) { return !!d.last_error; }).length,
+      };
+      self.renderSystemSummary(summary);
       self.renderDeviceStatuses(items);
     } catch (e) {
       App.clearNode(stats);
       stats.appendChild(App.createEl('div', { className: 'muted', text: e.message }));
       App.clearNode(grid);
     }
+  },
+  renderSystemSummary: function(summary) {
+    var stats = App.el('dashSysStats');
+    if (!stats) return;
+    App.clearNode(stats);
+
+    function appendStatCard(value, label, borderColor, valueColor) {
+      var card = App.createEl('div', { className: 'stat-card' });
+      if (borderColor) card.style.borderColor = borderColor;
+      var valueEl = App.createEl('div', { className: 'stat-value', text: value });
+      if (valueColor) valueEl.style.color = valueColor;
+      card.appendChild(valueEl);
+      card.appendChild(App.createEl('div', { className: 'stat-label', text: label }));
+      stats.appendChild(card);
+    }
+
+    appendStatCard(summary.devices_total || 0, 'Devices');
+    appendStatCard(summary.active_sessions || 0, 'Active SSH', 'color-mix(in srgb, var(--ok) 50%, var(--line))', 'var(--ok)');
+    appendStatCard(summary.online || 0, 'Online', 'color-mix(in srgb, var(--ok) 45%, var(--line))', 'var(--ok)');
+    appendStatCard(summary.offline || 0, 'Offline', (summary.offline || 0) ? 'color-mix(in srgb, var(--bad) 50%, var(--line))' : null, (summary.offline || 0) ? 'var(--bad)' : null);
+    appendStatCard(summary.stale || 0, 'Stale', (summary.stale || 0) ? 'color-mix(in srgb, var(--warn) 50%, var(--line))' : null, (summary.stale || 0) ? 'var(--warn)' : null);
+    appendStatCard(summary.errors || 0, 'Errors', (summary.errors || 0) ? 'color-mix(in srgb, var(--bad) 50%, var(--line))' : null, (summary.errors || 0) ? 'var(--bad)' : null);
+  },
+  formatFreshness: function(seconds, stale) {
+    if (seconds == null || !Number.isFinite(Number(seconds))) return 'never';
+    var s = Math.max(0, Number(seconds));
+    var txt = s < 60 ? (Math.floor(s) + 's ago') : (Math.floor(s / 60) + 'm ago');
+    return stale ? (txt + ' (stale)') : txt;
   },
   renderDeviceStatuses: function(items) {
     var self = this;
@@ -379,17 +468,20 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     for (var i = 0; i < items.length; i++) {
       (function(d) {
         d = self.mergeWithCachedStatus(d);
-        var isActive = d.status === 'active';
-        var hasError = !isActive && d.last_error;
+        var isActive = (d.session_state || d.status) === 'active';
+        var hasError = !!d.last_error;
+        var isStale = !!d.stale;
         var isSelected = App.state.selectedDevice && App.state.selectedDevice.id === d.id;
-        var cls = (isActive ? 'active ' : '') + (hasError ? 'error ' : '') + (isSelected ? 'selected' : '');
+        var cls = (isActive ? 'active ' : '') + (hasError ? 'error ' : '') + (isStale ? 'stale ' : '') + (isSelected ? 'selected' : '');
         var card = document.createElement('div');
         card.className = 'dev-status-card ' + cls.trim();
         card.dataset.deviceId = String(d.id);
-        var statusTxt = isActive ? 'Connected' : (hasError ? 'Error' : 'Not connected');
+        var statusTxt = isActive ? 'Session active' : 'Session reconnect';
         var idleTxt = isActive && d.idle_seconds != null ? (d.idle_seconds + 's') : '-';
         var uptimeTxt = d.uptime || '-';
         var rosTxt = d.ros_version || '-';
+        var healthTxt = d.health_state || 'unknown';
+        var checkedTxt = self.formatFreshness(d.freshness_seconds, d.stale);
         var main = document.createElement('div');
         main.className = 'dev-status-main';
         var head = document.createElement('div');
@@ -451,9 +543,12 @@ App.addPage('dashboard', 'Dashboard', '📊', {
           meta.appendChild(row);
         }
         appendMetaRow('Host', d.host + ':' + d.port, 'host');
+        appendMetaRow('Health', healthTxt, 'health-state');
+        appendMetaRow('Checked', checkedTxt, 'checked-at');
         appendMetaRow('Uptime', uptimeTxt, 'uptime');
         appendMetaRow('RouterOS', rosTxt, 'ros-version');
         appendMetaRow('Idle', idleTxt, 'idle');
+        appendMetaRow('Queue', d.queue_depth != null ? d.queue_depth : '-', 'queue-depth');
         appendMetaRow('Reconnects', d.reconnect_count != null ? d.reconnect_count : '-', 'reconnects');
         main.appendChild(meta);
         var err = document.createElement('div');
@@ -487,18 +582,20 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     var card = document.querySelector('.dev-status-card[data-device-id="' + d.id + '"]');
     if (!card) return;
 
-    var isActive = d.status === 'active';
-    var hasError = !isActive && d.last_error;
+    var isActive = (d.session_state || d.status) === 'active';
+    var hasError = !!d.last_error;
+    var isStale = !!d.stale;
     var isSelected = App.state.selectedDevice && App.state.selectedDevice.id === d.id;
     card.classList.toggle('active', !!isActive);
     card.classList.toggle('error', !!hasError);
+    card.classList.toggle('stale', !!isStale);
     card.classList.toggle('selected', !!isSelected);
 
     var chip = card.querySelector('[data-role="status-chip"]');
     if (chip) {
       chip.classList.remove('active', 'error', 'idle');
       chip.classList.add(isActive ? 'active' : (hasError ? 'error' : 'idle'));
-      chip.textContent = isActive ? 'Connected' : (hasError ? 'Error' : 'Not connected');
+      chip.textContent = isActive ? 'Session active' : 'Session reconnect';
     }
 
     var idle = card.querySelector('[data-role="idle"]');
@@ -518,6 +615,15 @@ App.addPage('dashboard', 'Dashboard', '📊', {
 
     var reconnects = card.querySelector('[data-role="reconnects"]');
     if (reconnects) reconnects.textContent = d.reconnect_count != null ? d.reconnect_count : '-';
+
+    var health = card.querySelector('[data-role="health-state"]');
+    if (health) health.textContent = d.health_state || 'unknown';
+
+    var checked = card.querySelector('[data-role="checked-at"]');
+    if (checked) checked.textContent = this.formatFreshness(d.freshness_seconds, d.stale);
+
+    var queue = card.querySelector('[data-role="queue-depth"]');
+    if (queue) queue.textContent = d.queue_depth != null ? d.queue_depth : '-';
 
     var err = card.querySelector('[data-role="status-error"]');
     if (err) {

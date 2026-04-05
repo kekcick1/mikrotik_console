@@ -1,9 +1,25 @@
 App.addPage('devices', 'Devices', '🖥️', {
   _filterText: '',
+  _statusById: {},
+  _statusFilter: 'all',
+  _statusUnsubscribe: null,
   init: function() {
     var self = this;
     var c = App.el('page-devices');
     c.innerHTML = '<div class="grid-2"><div class="stack"><div class="card panel" id="devicesAddCard"><h2>Add Device</h2><form id="devAddForm"><input name="name" placeholder="Name" required /><input name="host" placeholder="IP / DNS" required /><input name="port" type="number" value="22" required /><input name="username" placeholder="SSH user" required /><input name="password" type="password" placeholder="SSH password" required /><button type="submit">Save</button></form></div><div class="card panel"><h2>Import / Export</h2><input id="devBulkFile" type="file" accept=".txt,.csv,.list" /><input id="devBulkUser" placeholder="SSH user for imported devices" /><input id="devBulkPass" type="password" placeholder="SSH password for imported devices" /><input id="devBulkPort" type="number" value="22" min="1" max="65535" placeholder="SSH port" /><label class="inline-check"><input id="devBulkUpdate" type="checkbox" />Update existing</label><input id="devBulkServerPath" value="/home/user/ip _ M" placeholder="Server file path" /><div class="row"><button id="devImportFileBtn" type="button">Import File</button><button id="devImportServerBtn" class="secondary" type="button">Import Server Path</button></div><div style="margin-top:10px"><button id="devExportBtn" class="secondary" type="button">Export Device List</button></div></div><div class="card panel"><div class="row"><h2 style="margin:0">SSH Concurrency</h2><button id="devSshConcurrencyRefresh" class="secondary auto" type="button">Refresh</button></div><div class="muted">Global limit for simultaneous SSH operations across all routers.</div><div class="row"><input id="devSshConcurrencyLimit" type="number" min="1" max="32" value="4" /><button id="devSshConcurrencySave" class="auto" type="button">Apply</button></div><div id="devSshConcurrencyRuntime" class="status"></div></div></div><div class="card panel"><div class="row"><h2 style="margin:0">Device List</h2><button id="devRefreshVersionsBtn" class="secondary auto" type="button">Refresh Versions</button><button id="devDeleteSelectedBtn" class="danger auto" type="button">Delete Selected</button><button id="devRefreshBtn" class="secondary auto" type="button">Refresh</button></div><input id="devSearch" placeholder="Search by name, host, port, username or version" /><div id="devList" class="device-list" style="margin-top:8px"></div><div id="devStatus" class="status"></div></div></div>';
+
+    this._statusById = {};
+    this._statusFilter = 'all';
+
+    var listHost = App.el('devList');
+    if (listHost && listHost.parentNode) {
+      var filterRow = document.createElement('div');
+      filterRow.className = 'row';
+      filterRow.style.marginTop = '8px';
+      filterRow.id = 'devStatusFilters';
+      filterRow.innerHTML = '<span class="muted auto">Status:</span><button id="devFilterAll" class="secondary auto" type="button">All</button><button id="devFilterOffline" class="secondary auto" type="button">Offline</button><button id="devFilterError" class="secondary auto" type="button">Error</button><button id="devFilterStale" class="secondary auto" type="button">Stale</button><button id="devFilterQueue" class="secondary auto" type="button">High Queue</button>';
+      listHost.parentNode.insertBefore(filterRow, listHost);
+    }
 
     App.el('devAddForm').addEventListener('submit', async function(e) {
       e.preventDefault();
@@ -52,6 +68,11 @@ App.addPage('devices', 'Devices', '🖥️', {
       self._filterText = String(this.value || '').trim().toLowerCase();
       self.renderDevices();
     });
+    App.el('devFilterAll').onclick = function() { self.setStatusFilter('all'); };
+    App.el('devFilterOffline').onclick = function() { self.setStatusFilter('offline'); };
+    App.el('devFilterError').onclick = function() { self.setStatusFilter('error'); };
+    App.el('devFilterStale').onclick = function() { self.setStatusFilter('stale'); };
+    App.el('devFilterQueue').onclick = function() { self.setStatusFilter('high-queue'); };
 
     App.el('devList').onclick = async function(e) {
       var target = e.target;
@@ -129,8 +150,11 @@ App.addPage('devices', 'Devices', '🖥️', {
     } catch (e) { App.status(e.message, true); }
   },
   onEnter: function() {
+    this.ensureStatusSubscription();
     this.renderDevices();
     this.loadSshConcurrency();
+    this.loadStatusSnapshot();
+    this.renderFilterButtons();
     if (!App.can('operator')) {
       var addCard = App.el('devicesAddCard');
       if (addCard) addCard.classList.add('hidden');
@@ -140,6 +164,68 @@ App.addPage('devices', 'Devices', '🖥️', {
     var saveBtn = App.el('devSshConcurrencySave');
     if (saveBtn) saveBtn.disabled = !App.can('admin');
   },
+  ensureStatusSubscription: function() {
+    var self = this;
+    if (self._statusUnsubscribe) return;
+    self._statusUnsubscribe = App.subscribeStatusStream(function(payload) {
+      if (!payload || !Array.isArray(payload.items)) return;
+      var next = {};
+      for (var i = 0; i < payload.items.length; i++) {
+        var item = payload.items[i] || {};
+        if (item.id != null) next[item.id] = item;
+      }
+      self._statusById = next;
+      var page = App.el('page-devices');
+      if (page && page.classList.contains('active')) self.renderDevices();
+    });
+  },
+  loadStatusSnapshot: async function() {
+    if (Object.keys(this._statusById || {}).length) return;
+    try {
+      var out = await App.api('/api/devices/status-overview?lite=1');
+      var next = {};
+      for (var i = 0; i < out.length; i++) {
+        if (out[i] && out[i].id != null) next[out[i].id] = out[i];
+      }
+      this._statusById = next;
+      this.renderDevices();
+    } catch (_) {}
+  },
+  setStatusFilter: function(filter) {
+    this._statusFilter = filter || 'all';
+    this.renderFilterButtons();
+    this.renderDevices();
+  },
+  renderFilterButtons: function() {
+    var self = this;
+    var map = {
+      all: App.el('devFilterAll'),
+      offline: App.el('devFilterOffline'),
+      error: App.el('devFilterError'),
+      stale: App.el('devFilterStale'),
+      'high-queue': App.el('devFilterQueue'),
+    };
+    Object.keys(map).forEach(function(key) {
+      var btn = map[key];
+      if (!btn) return;
+      btn.classList.toggle('success', key === self._statusFilter);
+      btn.classList.toggle('secondary', key !== self._statusFilter);
+    });
+  },
+  formatFreshness: function(seconds, stale) {
+    if (seconds == null || !Number.isFinite(Number(seconds))) return 'never';
+    var n = Math.max(0, Number(seconds));
+    var text = n < 60 ? (Math.floor(n) + 's ago') : (Math.floor(n / 60) + 'm ago');
+    return stale ? (text + ' (stale)') : text;
+  },
+  matchesStatusFilter: function(status) {
+    var st = status || {};
+    if (this._statusFilter === 'offline') return st.health_state === 'offline';
+    if (this._statusFilter === 'error') return !!st.last_error;
+    if (this._statusFilter === 'stale') return !!st.stale;
+    if (this._statusFilter === 'high-queue') return !!st.high_queue || Number(st.queue_depth || 0) >= 3;
+    return true;
+  },
   renderDevices: function() {
     var list = App.el('devList');
     App.clearNode(list);
@@ -147,6 +233,8 @@ App.addPage('devices', 'Devices', '🖥️', {
     var visibleCount = 0;
     for (var i = 0; i < App.state.devices.length; i++) {
       (function(d) {
+        var status = this._statusById[d.id] || {};
+        if (!this.matchesStatusFilter(status)) return;
         var searchable = (d.name + ' ' + d.host + ' ' + d.port + ' ' + d.username + ' ' + (d.ros_version || '')).toLowerCase();
         if (filter && searchable.indexOf(filter) === -1) return;
         visibleCount += 1;
@@ -160,6 +248,40 @@ App.addPage('devices', 'Devices', '🖥️', {
         box.appendChild(title);
         box.appendChild(meta);
         box.appendChild(versionEl);
+
+        var health = status.health_state || 'unknown';
+        var session = status.session_state || status.status || 'reconnect';
+        var freshness = this.formatFreshness(status.freshness_seconds, status.stale);
+        var queueDepth = Number(status.queue_depth || 0);
+        var healthBadgeClass = health === 'online' ? 'ok' : (health === 'offline' ? 'bad' : 'warn');
+        var sessionBadgeClass = session === 'active' ? 'ok' : 'warn';
+
+        var badges = document.createElement('div');
+        badges.style.display = 'flex';
+        badges.style.gap = '6px';
+        badges.style.flexWrap = 'wrap';
+        badges.style.marginTop = '6px';
+        badges.appendChild(App.createEl('span', { className: 'badge ' + healthBadgeClass, text: 'Health: ' + health }));
+        badges.appendChild(App.createEl('span', { className: 'badge ' + sessionBadgeClass, text: 'Session: ' + session }));
+        if (queueDepth > 0) {
+          badges.appendChild(App.createEl('span', { className: 'badge warn', text: 'Queue: ' + queueDepth }));
+        }
+        if (status.last_error) {
+          badges.appendChild(App.createEl('span', { className: 'badge bad', text: 'Error' }));
+        }
+        if (status.stale) {
+          badges.appendChild(App.createEl('span', { className: 'badge warn', text: 'Stale' }));
+        }
+        box.appendChild(badges);
+
+        var detail = App.createEl('div', { className: 'muted', text: 'Checked: ' + freshness + ' • Reconnects: ' + (status.reconnect_count != null ? status.reconnect_count : '-') });
+        box.appendChild(detail);
+
+        if (status.last_error) {
+          box.appendChild(App.createEl('div', { className: 'muted', text: 'Last error: ' + status.last_error }));
+        } else if (status.last_event === 'disconnected_by_user') {
+          box.appendChild(App.createEl('div', { className: 'muted', text: 'Last event: disconnected_by_user' }));
+        }
         if (App.can('operator')) {
           var edit = document.createElement('button');
           edit.textContent = 'Edit'; edit.className = 'secondary'; edit.style.marginTop = '6px';
@@ -174,10 +296,10 @@ App.addPage('devices', 'Devices', '🖥️', {
           box.appendChild(del);
         }
         list.appendChild(box);
-      })(App.state.devices[i]);
+      }).call(this, App.state.devices[i]);
     }
     var st = App.el('devStatus');
-    if (st) st.textContent = 'Devices: ' + visibleCount + ' / ' + App.state.devices.length;
+    if (st) st.textContent = 'Devices: ' + visibleCount + ' / ' + App.state.devices.length + ' • Filter: ' + this._statusFilter;
   },
   deleteDevice: async function(device) {
     await App.api('/api/devices/' + device.id, { method: 'DELETE' });

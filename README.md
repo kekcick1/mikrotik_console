@@ -171,6 +171,15 @@ Optional tuning:
 - `MIM_SSH_RETRY_ATTEMPTS` (default: 2)
 - `MIM_SSH_RETRY_BASE_MS` (default: 220)
 - `MIM_BROADCAST_CONFIRM_TTL_SECONDS` (default: 90)
+- `MIM_HEALTH_WORKER_ENABLED` (default: 1)
+- `MIM_HEALTH_WORKER_INTERVAL_SECONDS` (default: 45)
+- `MIM_HEALTH_WORKER_COMMAND` (default: `/system identity print without-paging`)
+- `MIM_HEALTH_STALE_SECONDS` (default: 120)
+- `MIM_HEALTH_HIGH_QUEUE_DEPTH` (default: 3)
+- `MIM_ALERT_COOLDOWN_SECONDS` (default: 300)
+- `MIM_ALERT_REPEAT_WHILE_DOWN` (default: 0)
+- `MIM_ALERT_HISTORY_MAX` (default: 500)
+- `MIM_ALERT_WEBHOOK_URL` (optional webhook for alert notifications)
 
 ### Security Notes
 
@@ -357,6 +366,15 @@ docker compose -f docker-compose.traefik.yml up -d --build
 - `MIM_SSH_RETRY_ATTEMPTS` (типово: 2)
 - `MIM_SSH_RETRY_BASE_MS` (типово: 220)
 - `MIM_BROADCAST_CONFIRM_TTL_SECONDS` (типово: 90)
+- `MIM_HEALTH_WORKER_ENABLED` (типово: 1)
+- `MIM_HEALTH_WORKER_INTERVAL_SECONDS` (типово: 45)
+- `MIM_HEALTH_WORKER_COMMAND` (типово: `/system identity print without-paging`)
+- `MIM_HEALTH_STALE_SECONDS` (типово: 120)
+- `MIM_HEALTH_HIGH_QUEUE_DEPTH` (типово: 3)
+- `MIM_ALERT_COOLDOWN_SECONDS` (типово: 300)
+- `MIM_ALERT_REPEAT_WHILE_DOWN` (типово: 0)
+- `MIM_ALERT_HISTORY_MAX` (типово: 500)
+- `MIM_ALERT_WEBHOOK_URL` (необов'язковий webhook для сповіщень)
 
 ### Безпека
 

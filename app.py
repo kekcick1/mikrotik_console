@@ -13,6 +13,8 @@ import sqlite3
 import tarfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +53,25 @@ BROADCAST_CONFIRM_TTL_SECONDS = int(os.environ.get("MIM_BROADCAST_CONFIRM_TTL_SE
 ROS_VERSION_RECHECK_SECONDS = int(os.environ.get("MIM_ROS_VERSION_RECHECK_SECONDS", "1800"))
 GLOBAL_SSH_LIMIT_DEFAULT = int(os.environ.get("MIM_GLOBAL_SSH_LIMIT", "4"))
 ROS_API_TIMEOUT = int(os.environ.get("MIM_ROS_API_TIMEOUT", "8"))
+HEALTH_STALE_SECONDS = int(os.environ.get("MIM_HEALTH_STALE_SECONDS", "120"))
+HEALTH_HIGH_QUEUE_DEPTH = int(os.environ.get("MIM_HEALTH_HIGH_QUEUE_DEPTH", "3"))
+HEALTH_WORKER_ENABLED = str(os.environ.get("MIM_HEALTH_WORKER_ENABLED", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+HEALTH_WORKER_INTERVAL_SECONDS = int(os.environ.get("MIM_HEALTH_WORKER_INTERVAL_SECONDS", "45"))
+HEALTH_WORKER_COMMAND = os.environ.get("MIM_HEALTH_WORKER_COMMAND", "/system identity print without-paging").strip() or "/system identity print without-paging"
+ALERT_COOLDOWN_SECONDS = int(os.environ.get("MIM_ALERT_COOLDOWN_SECONDS", "300"))
+ALERT_WEBHOOK_URL = os.environ.get("MIM_ALERT_WEBHOOK_URL", "").strip()
+ALERT_REPEAT_WHILE_DOWN = str(os.environ.get("MIM_ALERT_REPEAT_WHILE_DOWN", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ALERT_HISTORY_MAX = int(os.environ.get("MIM_ALERT_HISTORY_MAX", "500"))
 
 ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
 SSH_POOL_LOCK = threading.Lock()
@@ -65,6 +86,21 @@ GLOBAL_SSH_COND = threading.Condition()
 GLOBAL_SSH_ACTIVE = 0
 GLOBAL_SSH_WAITING = 0
 GLOBAL_SSH_LIMIT = max(1, GLOBAL_SSH_LIMIT_DEFAULT)
+HEALTH_WORKER_STOP = threading.Event()
+HEALTH_WORKER_THREAD: threading.Thread | None = None
+HEALTH_WORKER_STATE_LOCK = threading.Lock()
+HEALTH_WORKER_STATE: dict[int, dict] = {}
+ALERTS_LOCK = threading.Lock()
+ALERT_HISTORY = collections.deque(maxlen=max(50, ALERT_HISTORY_MAX))
+ALERT_LAST_SENT: dict[str, float] = {}
+ALERT_SEQ = 0
+HEALTH_WORKER_RUNTIME_LOCK = threading.Lock()
+HEALTH_WORKER_RUNTIME = {
+    "last_cycle_at": None,
+    "last_cycle_duration_ms": None,
+    "last_cycle_devices": 0,
+    "last_cycle_failures": 0,
+}
 
 
 def _derive_auth_secret(secret: str) -> str:
@@ -169,6 +205,10 @@ class DeviceBulkImportIn(BaseModel):
 
 class SSHConcurrencyIn(BaseModel):
     limit: int = Field(ge=1, le=32)
+
+
+class HealthWorkerToggleIn(BaseModel):
+    enabled: bool
 
 
 def init_db() -> None:
@@ -298,6 +338,17 @@ def set_global_ssh_limit(limit: int) -> int:
     return safe
 
 
+def _is_enabled_value(value: str | None, default: bool = True) -> bool:
+    if value is None:
+        return bool(default)
+    v = str(value).strip().lower()
+    if v in {"1", "true", "yes", "on"}:
+        return True
+    if v in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 def get_global_ssh_runtime() -> dict:
     with GLOBAL_SSH_COND:
         return {
@@ -305,6 +356,16 @@ def get_global_ssh_runtime() -> dict:
             "active": int(GLOBAL_SSH_ACTIVE),
             "waiting": int(GLOBAL_SSH_WAITING),
         }
+
+
+def set_health_worker_enabled(enabled: bool) -> bool:
+    global HEALTH_WORKER_ENABLED
+    HEALTH_WORKER_ENABLED = bool(enabled)
+    if HEALTH_WORKER_ENABLED:
+        start_health_worker()
+    else:
+        stop_health_worker()
+    return HEALTH_WORKER_ENABLED
 
 
 def _acquire_global_ssh_slot() -> None:
@@ -333,6 +394,10 @@ def load_runtime_settings() -> None:
     except Exception:
         limit = max(1, GLOBAL_SSH_LIMIT_DEFAULT)
     set_global_ssh_limit(limit)
+
+    worker_default = "1" if HEALTH_WORKER_ENABLED else "0"
+    worker_raw = get_setting("health_worker_enabled", worker_default)
+    set_health_worker_enabled(_is_enabled_value(worker_raw, default=HEALTH_WORKER_ENABLED))
 
 
 def hash_password(password: str, salt_hex: str | None = None) -> str:
@@ -440,6 +505,254 @@ def log_audit(username: str, role: str, action: str, device_id: int | None = Non
         conn.commit()
 
 
+def _utc_now_iso() -> str:
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _record_alert(
+    event: str,
+    severity: str,
+    device_id: int | None,
+    device_name: str,
+    message: str,
+    details: str = "",
+    webhook_status: int | None = None,
+    webhook_error: str | None = None,
+) -> dict:
+    global ALERT_SEQ
+    entry = {
+        "id": 0,
+        "created_at": _utc_now_iso(),
+        "event": event,
+        "severity": severity,
+        "device_id": device_id,
+        "device_name": device_name,
+        "message": message,
+        "details": details,
+        "webhook_enabled": bool(ALERT_WEBHOOK_URL),
+        "webhook_status": webhook_status,
+        "webhook_error": webhook_error,
+    }
+    with ALERTS_LOCK:
+        ALERT_SEQ += 1
+        entry["id"] = ALERT_SEQ
+        ALERT_HISTORY.append(entry)
+    return entry
+
+
+def list_alert_history(limit: int = 200) -> list[dict]:
+    safe = max(1, min(2000, int(limit)))
+    with ALERTS_LOCK:
+        items = list(ALERT_HISTORY)
+    if not items:
+        return []
+    items = items[-safe:]
+    items.reverse()
+    return [dict(x) for x in items]
+
+
+def list_active_health_issues() -> list[dict]:
+    with HEALTH_WORKER_STATE_LOCK:
+        out = [dict(v) for v in HEALTH_WORKER_STATE.values() if v.get("is_down")]
+    out.sort(key=lambda x: x.get("last_change_at") or "", reverse=True)
+    return out
+
+
+def get_health_worker_runtime() -> dict:
+    with HEALTH_WORKER_RUNTIME_LOCK:
+        runtime = dict(HEALTH_WORKER_RUNTIME)
+    with HEALTH_WORKER_STATE_LOCK:
+        tracked = len(HEALTH_WORKER_STATE)
+        active_alerts = sum(1 for x in HEALTH_WORKER_STATE.values() if x.get("is_down"))
+    return {
+        "enabled": bool(HEALTH_WORKER_ENABLED),
+        "running": bool(HEALTH_WORKER_THREAD and HEALTH_WORKER_THREAD.is_alive()),
+        "interval_seconds": int(max(10, HEALTH_WORKER_INTERVAL_SECONDS)),
+        "command": HEALTH_WORKER_COMMAND,
+        "alert_cooldown_seconds": int(max(30, ALERT_COOLDOWN_SECONDS)),
+        "tracked_devices": int(tracked),
+        "active_alerts": int(active_alerts),
+        **runtime,
+    }
+
+
+def _emit_health_alert(event: str, severity: str, row: sqlite3.Row, message: str, details: str = "") -> None:
+    device_id = int(row["id"]) if row and row["id"] is not None else None
+    device_name = row["name"] if row and row["name"] else "unknown"
+    dedupe_key = f"{event}:{device_id or 0}"
+    now = time.time()
+    cooldown = max(30, int(ALERT_COOLDOWN_SECONDS))
+
+    with ALERTS_LOCK:
+        last_sent = float(ALERT_LAST_SENT.get(dedupe_key, 0) or 0)
+        if (now - last_sent) < cooldown:
+            return
+        ALERT_LAST_SENT[dedupe_key] = now
+
+    webhook_status = None
+    webhook_error = None
+    payload = {
+        "created_at": _utc_now_iso(),
+        "event": event,
+        "severity": severity,
+        "device": {
+            "id": device_id,
+            "name": device_name,
+            "host": row["host"],
+            "port": int(row["port"]),
+        },
+        "message": message,
+        "details": details,
+    }
+
+    if ALERT_WEBHOOK_URL:
+        req = urllib.request.Request(
+            ALERT_WEBHOOK_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                webhook_status = int(getattr(resp, "status", resp.getcode()))
+        except urllib.error.HTTPError as e:
+            webhook_status = int(getattr(e, "code", 0) or 0)
+            webhook_error = str(e)
+        except Exception as e:
+            webhook_error = str(e)
+
+    _record_alert(
+        event=event,
+        severity=severity,
+        device_id=device_id,
+        device_name=device_name,
+        message=message,
+        details=details,
+        webhook_status=webhook_status,
+        webhook_error=webhook_error,
+    )
+    try:
+        log_audit("system", "admin", "health_alert", device_id, f"{event}: {message}")
+    except Exception:
+        pass
+
+
+def _set_health_worker_state(row: sqlite3.Row, is_down: bool, last_error: str | None) -> tuple[bool, bool]:
+    device_id = int(row["id"])
+    now_iso = _utc_now_iso()
+    with HEALTH_WORKER_STATE_LOCK:
+        prev = HEALTH_WORKER_STATE.get(device_id)
+        prev_down = bool(prev and prev.get("is_down"))
+        changed = (prev is None) or (prev_down != bool(is_down))
+        HEALTH_WORKER_STATE[device_id] = {
+            "device_id": device_id,
+            "name": row["name"],
+            "host": row["host"],
+            "port": int(row["port"]),
+            "is_down": bool(is_down),
+            "last_error": (last_error or "")[:300] if last_error else None,
+            "last_checked_at": now_iso,
+            "last_change_at": now_iso if changed else (prev.get("last_change_at") if prev else now_iso),
+        }
+    return prev_down, changed
+
+
+def _health_worker_devices() -> list[sqlite3.Row]:
+    with closing(db_conn()) as conn:
+        rows = conn.execute(
+            "SELECT id, name, host, port, username, password_enc FROM devices ORDER BY id"
+        ).fetchall()
+    return rows
+
+
+def _health_worker_cycle() -> tuple[int, int]:
+    rows = _health_worker_devices()
+    failures = 0
+    seen_ids = set()
+    for row in rows:
+        if HEALTH_WORKER_STOP.is_set():
+            break
+        seen_ids.add(int(row["id"]))
+        dkey = _device_key(row["host"], int(row["port"]))
+        try:
+            password = fernet.decrypt(row["password_enc"].encode()).decode()
+            safe_ssh_exec(row["host"], int(row["port"]), row["username"], password, HEALTH_WORKER_COMMAND)
+            _diag_mark_event(dkey, "health_probe_ok")
+            was_down, changed = _set_health_worker_state(row, is_down=False, last_error=None)
+            if was_down and changed:
+                _emit_health_alert("device_recovered", "info", row, "Device recovered and is reachable")
+        except HTTPException as e:
+            failures += 1
+            detail = str(e.detail)
+            _diag_mark_event(dkey, "health_probe_failed")
+            was_down, changed = _set_health_worker_state(row, is_down=True, last_error=detail)
+            if (not was_down and changed) or ALERT_REPEAT_WHILE_DOWN:
+                _emit_health_alert("device_down", "critical", row, "Device is unreachable", detail)
+        except Exception as e:
+            failures += 1
+            detail = str(e)
+            _diag_mark_event(dkey, "health_probe_failed")
+            was_down, changed = _set_health_worker_state(row, is_down=True, last_error=detail)
+            if (not was_down and changed) or ALERT_REPEAT_WHILE_DOWN:
+                _emit_health_alert("device_down", "critical", row, "Device is unreachable", detail)
+
+    with HEALTH_WORKER_STATE_LOCK:
+        for device_id in list(HEALTH_WORKER_STATE.keys()):
+            if device_id not in seen_ids:
+                HEALTH_WORKER_STATE.pop(device_id, None)
+
+    return len(rows), failures
+
+
+def _health_worker_main() -> None:
+    interval = max(10, int(HEALTH_WORKER_INTERVAL_SECONDS))
+    while not HEALTH_WORKER_STOP.is_set():
+        started = time.time()
+        devices = 0
+        failures = 0
+        try:
+            devices, failures = _health_worker_cycle()
+        except Exception as e:
+            _record_alert(
+                event="health_worker_error",
+                severity="warning",
+                device_id=None,
+                device_name="worker",
+                message="Health worker cycle failed",
+                details=str(e),
+            )
+        duration_ms = int((time.time() - started) * 1000)
+        with HEALTH_WORKER_RUNTIME_LOCK:
+            HEALTH_WORKER_RUNTIME["last_cycle_at"] = _utc_now_iso()
+            HEALTH_WORKER_RUNTIME["last_cycle_duration_ms"] = duration_ms
+            HEALTH_WORKER_RUNTIME["last_cycle_devices"] = int(devices)
+            HEALTH_WORKER_RUNTIME["last_cycle_failures"] = int(failures)
+
+        wait_for = max(1, interval - int(time.time() - started))
+        if HEALTH_WORKER_STOP.wait(wait_for):
+            break
+
+
+def start_health_worker() -> None:
+    global HEALTH_WORKER_THREAD
+    if not HEALTH_WORKER_ENABLED:
+        return
+    if HEALTH_WORKER_THREAD and HEALTH_WORKER_THREAD.is_alive():
+        return
+    HEALTH_WORKER_STOP.clear()
+    HEALTH_WORKER_THREAD = threading.Thread(target=_health_worker_main, name="mim-health-worker", daemon=True)
+    HEALTH_WORKER_THREAD.start()
+
+
+def stop_health_worker() -> None:
+    global HEALTH_WORKER_THREAD
+    HEALTH_WORKER_STOP.set()
+    t = HEALTH_WORKER_THREAD
+    if t and t.is_alive():
+        t.join(timeout=8)
+    HEALTH_WORKER_THREAD = None
+
+
 def _ssh_pool_key(host: str, port: int, username: str, password: str) -> str:
     pw_hash = hashlib.sha256(password.encode()).hexdigest()[:16]
     return f"{host}|{port}|{username}|{pw_hash}"
@@ -453,6 +766,14 @@ def _diag_get(device_key: str) -> dict:
     with SSH_DIAG_LOCK:
         entry = SSH_DIAG.get(device_key)
         if entry:
+            entry.setdefault("last_rtt_ms", None)
+            entry.setdefault("last_error", None)
+            entry.setdefault("reconnect_count", 0)
+            entry.setdefault("last_connected_at", None)
+            entry.setdefault("last_success_at", None)
+            entry.setdefault("last_attempt_at", None)
+            entry.setdefault("last_health_check_at", None)
+            entry.setdefault("last_event", None)
             return entry
         entry = {
             "last_rtt_ms": None,
@@ -461,6 +782,8 @@ def _diag_get(device_key: str) -> dict:
             "last_connected_at": None,
             "last_success_at": None,
             "last_attempt_at": None,
+            "last_health_check_at": None,
+            "last_event": None,
         }
         SSH_DIAG[device_key] = entry
         return entry
@@ -468,26 +791,40 @@ def _diag_get(device_key: str) -> dict:
 
 def _diag_mark_attempt(device_key: str) -> None:
     diag = _diag_get(device_key)
-    diag["last_attempt_at"] = datetime.utcnow().isoformat() + "Z"
+    ts = datetime.utcnow().isoformat() + "Z"
+    diag["last_attempt_at"] = ts
+    diag["last_health_check_at"] = ts
 
 
 def _diag_mark_connect(device_key: str, reconnect: bool) -> None:
     diag = _diag_get(device_key)
+    had_connected_before = bool(diag.get("last_connected_at"))
     diag["last_connected_at"] = datetime.utcnow().isoformat() + "Z"
-    if reconnect:
+    diag["last_event"] = "connected"
+    if reconnect and had_connected_before:
         diag["reconnect_count"] += 1
 
 
 def _diag_mark_success(device_key: str, rtt_ms: int) -> None:
     diag = _diag_get(device_key)
+    ts = datetime.utcnow().isoformat() + "Z"
     diag["last_rtt_ms"] = rtt_ms
     diag["last_error"] = None
-    diag["last_success_at"] = datetime.utcnow().isoformat() + "Z"
+    diag["last_success_at"] = ts
+    diag["last_health_check_at"] = ts
+    diag["last_event"] = "command_success"
 
 
 def _diag_mark_error(device_key: str, err: str) -> None:
     diag = _diag_get(device_key)
+    diag["last_health_check_at"] = datetime.utcnow().isoformat() + "Z"
     diag["last_error"] = (err or "unknown")[:300]
+    diag["last_event"] = "error"
+
+
+def _diag_mark_event(device_key: str, event_name: str) -> None:
+    diag = _diag_get(device_key)
+    diag["last_event"] = (event_name or "event")[:80]
 
 
 def _make_broadcast_confirm_token(command: str, username: str, device_ids: list[int]) -> str:
@@ -1345,6 +1682,7 @@ def on_startup() -> None:
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
+    stop_health_worker()
     with SSH_POOL_LOCK:
         entries = list(SSH_POOL.values())
         SSH_POOL.clear()

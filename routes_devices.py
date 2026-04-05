@@ -1,10 +1,13 @@
+import asyncio
+import json
 import re
 import time
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 
 def register_device_routes(app, ctx) -> None:
@@ -26,6 +29,201 @@ def register_device_routes(app, ctx) -> None:
             if m:
                 uptime = m.group(1)
         return uptime
+
+    def _parse_iso_utc(value: str | None) -> float | None:
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except Exception:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return float(dt.timestamp())
+
+    def _read_stream_actor(request: Request) -> object:
+        token = (request.query_params.get("access_token") or "").strip()
+        if not token:
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                token = auth.split(" ", 1)[1].strip()
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing bearer token")
+
+        payload = ctx.parse_token(token)
+        username = payload.get("u", "")
+        with closing(ctx.db_conn()) as conn:
+            row = conn.execute("SELECT id, username, role FROM users WHERE username = ?", (username,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="User not found")
+        return row
+
+    def _load_visible_device_rows(actor: object) -> list[object]:
+        with closing(ctx.db_conn()) as conn:
+            if ctx.ROLE_LEVEL.get(actor["role"], 0) >= ctx.ROLE_LEVEL["admin"]:
+                rows = conn.execute(
+                    "SELECT id, name, host, port, username, password_enc, ros_version FROM devices ORDER BY name"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, name, host, port, username, password_enc, ros_version FROM devices WHERE owner_id = ? ORDER BY name",
+                    (actor["id"],),
+                ).fetchall()
+        return rows
+
+    def _build_device_status(row: object, lite: bool = False) -> dict:
+        dkey = ctx._device_key(row["host"], row["port"])
+        stale_threshold = max(30, int(getattr(ctx, "HEALTH_STALE_SECONDS", 120)))
+        high_queue_threshold = max(1, int(getattr(ctx, "HEALTH_HIGH_QUEUE_DEPTH", 3)))
+
+        try:
+            password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
+            key = ctx._ssh_pool_key(row["host"], row["port"], row["username"], password)
+        except Exception:
+            password = None
+            key = None
+
+        active = False
+        idle_seconds = None
+        uptime = None
+        if key:
+            with ctx.SSH_POOL_LOCK:
+                entry = ctx.SSH_POOL.get(key)
+                if entry and ctx._is_pool_entry_active(entry):
+                    active = True
+                    idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
+
+        queue_depth = 0
+        with ctx.DEVICE_QUEUES_LOCK:
+            queue = ctx.DEVICE_QUEUES.get(dkey)
+            if queue:
+                queue_depth = len(queue.get("tokens", []))
+
+        if active and (not lite) and password:
+            try:
+                out_ctx = ctx.exec_feature_command(
+                    row["host"],
+                    int(row["port"]),
+                    row["username"],
+                    password,
+                    "resource_print",
+                    int(row["id"]),
+                )
+                uptime = _parse_uptime(out_ctx.get("output", ""))
+            except Exception:
+                # Keep list/status calls resilient even if resource command fails.
+                pass
+
+        diag = ctx._diag_get(dkey).copy()
+        last_health_check_at = diag.get("last_health_check_at") or diag.get("last_success_at") or diag.get("last_attempt_at")
+        last_health_check_ts = _parse_iso_utc(last_health_check_at)
+        freshness_seconds = None
+        stale = False
+        if last_health_check_ts is not None:
+            freshness_seconds = int(max(0, time.time() - last_health_check_ts))
+            stale = freshness_seconds > stale_threshold
+
+        session_state = "active" if active else "reconnect"
+        last_error = diag.get("last_error")
+        last_event = diag.get("last_event")
+        high_queue = queue_depth >= high_queue_threshold
+
+        if last_event == "disconnected_by_user":
+            health_state = "offline"
+        elif session_state == "active":
+            if stale or last_error or high_queue:
+                health_state = "degraded"
+            else:
+                health_state = "online"
+        else:
+            if last_error or stale:
+                health_state = "offline"
+            elif last_health_check_at:
+                health_state = "degraded"
+            else:
+                health_state = "unknown"
+
+        return {
+            "id": int(row["id"]),
+            "name": row["name"],
+            "host": row["host"],
+            "port": int(row["port"]),
+            "ros_version": row["ros_version"],
+            "status": session_state,
+            "session_state": session_state,
+            "health_state": health_state,
+            "health_rtt_ms": diag.get("last_rtt_ms"),
+            "last_health_check_at": last_health_check_at,
+            "freshness_seconds": freshness_seconds,
+            "stale": stale,
+            "high_queue": high_queue,
+            "queue_depth": int(queue_depth),
+            "idle_seconds": idle_seconds,
+            "last_error": last_error,
+            "last_event": last_event,
+            "reconnect_count": int(diag.get("reconnect_count", 0)),
+            "last_success_at": diag.get("last_success_at"),
+            "uptime": uptime,
+        }
+
+    def _build_fleet_summary(items: list[dict]) -> dict:
+        online = sum(1 for x in items if x.get("health_state") == "online")
+        degraded = sum(1 for x in items if x.get("health_state") == "degraded")
+        offline = sum(1 for x in items if x.get("health_state") == "offline")
+        unknown = sum(1 for x in items if x.get("health_state") == "unknown")
+        stale = sum(1 for x in items if x.get("stale"))
+        errors = sum(1 for x in items if x.get("last_error"))
+        active_sessions = sum(1 for x in items if x.get("session_state") == "active")
+
+        scored = []
+        for item in items:
+            score = 0
+            if item.get("last_error"):
+                score += 100
+            score += int(item.get("reconnect_count") or 0) * 5
+            if item.get("stale"):
+                score += 30
+            if item.get("high_queue"):
+                score += 15
+            if item.get("session_state") != "active":
+                score += 5
+            if score > 0:
+                scored.append((score, item))
+
+        scored.sort(key=lambda t: (-t[0], t[1].get("name") or ""))
+        top_problematic = [
+            {
+                "id": x["id"],
+                "name": x["name"],
+                "health_state": x.get("health_state"),
+                "session_state": x.get("session_state"),
+                "stale": bool(x.get("stale")),
+                "high_queue": bool(x.get("high_queue")),
+                "queue_depth": int(x.get("queue_depth") or 0),
+                "reconnect_count": int(x.get("reconnect_count") or 0),
+                "last_error": x.get("last_error"),
+                "freshness_seconds": x.get("freshness_seconds"),
+                "score": int(score),
+            }
+            for score, x in scored[:8]
+        ]
+
+        return {
+            "devices_total": len(items),
+            "active_sessions": int(active_sessions),
+            "online": int(online),
+            "degraded": int(degraded),
+            "offline": int(offline),
+            "unknown": int(unknown),
+            "stale": int(stale),
+            "errors": int(errors),
+            "top_problematic": top_problematic,
+        }
 
     @app.get("/api/devices")
     def list_devices(request: Request) -> list[dict]:
@@ -223,116 +421,60 @@ def register_device_routes(app, ctx) -> None:
     def devices_status_overview(request: Request) -> list[dict]:
         actor = ctx.require_role(request, "viewer")
         lite = request.query_params.get("lite") == "1"
-        with closing(ctx.db_conn()) as conn:
-            if ctx.ROLE_LEVEL.get(actor["role"], 0) >= ctx.ROLE_LEVEL["admin"]:
-                rows = conn.execute(
-                    "SELECT id, name, host, port, username, password_enc, ros_version FROM devices ORDER BY name"
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT id, name, host, port, username, password_enc, ros_version FROM devices WHERE owner_id = ? ORDER BY name",
-                    (actor["id"],),
-                ).fetchall()
-
-        result = []
-        for row in rows:
-            try:
-                password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
-                key = ctx._ssh_pool_key(row["host"], row["port"], row["username"], password)
-            except Exception:
-                key = None
-
-            dkey = ctx._device_key(row["host"], row["port"])
-            active = False
-            idle_seconds = None
-            uptime = None
-            if key:
-                with ctx.SSH_POOL_LOCK:
-                    entry = ctx.SSH_POOL.get(key)
-                    if entry and ctx._is_pool_entry_active(entry):
-                        active = True
-                        idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
-
-            if active and not lite:
-                try:
-                    out_ctx = ctx.exec_feature_command(
-                        row["host"],
-                        int(row["port"]),
-                        row["username"],
-                        password,
-                        "resource_print",
-                        int(row["id"]),
-                    )
-                    uptime = _parse_uptime(out_ctx.get("output", ""))
-                except Exception:
-                    # Keep status-overview resilient even when metrics command fails.
-                    pass
-
-            diag = ctx._diag_get(dkey).copy()
-            result.append(
-                {
-                    "id": int(row["id"]),
-                    "name": row["name"],
-                    "host": row["host"],
-                    "port": int(row["port"]),
-                    "ros_version": row["ros_version"],
-                    "status": "active" if active else "reconnect",
-                    "idle_seconds": idle_seconds,
-                    "last_error": diag.get("last_error"),
-                    "reconnect_count": int(diag.get("reconnect_count", 0)),
-                    "last_success_at": diag.get("last_success_at"),
-                    "uptime": uptime,
-                }
-            )
-        return result
+        rows = _load_visible_device_rows(actor)
+        return [_build_device_status(row, lite=lite) for row in rows]
 
     @app.get("/api/devices/{device_id}/status-overview")
     def device_status_overview(device_id: int, request: Request) -> dict:
         actor = ctx.require_role(request, "viewer")
         lite = request.query_params.get("lite") == "1"
         row = ctx.load_device(device_id, actor)
+        return _build_device_status(row, lite=lite)
 
-        password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
-        key = ctx._ssh_pool_key(row["host"], row["port"], row["username"], password)
-        dkey = ctx._device_key(row["host"], row["port"])
+    @app.get("/api/devices/fleet-summary")
+    def devices_fleet_summary(request: Request) -> dict:
+        actor = ctx.require_role(request, "viewer")
+        rows = _load_visible_device_rows(actor)
+        items = [_build_device_status(row, lite=True) for row in rows]
+        out = _build_fleet_summary(items)
+        out["generated_at"] = datetime.utcnow().isoformat() + "Z"
+        return out
 
-        active = False
-        idle_seconds = None
-        uptime = None
-        with ctx.SSH_POOL_LOCK:
-            entry = ctx.SSH_POOL.get(key)
-            if entry and ctx._is_pool_entry_active(entry):
-                active = True
-                idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
+    @app.get("/api/devices/status-stream")
+    async def devices_status_stream(request: Request) -> StreamingResponse:
+        actor = _read_stream_actor(request)
+        if ctx.ROLE_LEVEL.get(actor["role"], 0) < ctx.ROLE_LEVEL["viewer"]:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
 
-        if active and not lite:
-            try:
-                out_ctx = ctx.exec_feature_command(
-                    row["host"],
-                    int(row["port"]),
-                    row["username"],
-                    password,
-                    "resource_print",
-                    int(row["id"]),
-                )
-                uptime = _parse_uptime(out_ctx.get("output", ""))
-            except Exception:
-                pass
+        lite = request.query_params.get("lite", "1") != "0"
+        interval_raw = request.query_params.get("interval")
+        try:
+            interval_sec = float(interval_raw) if interval_raw is not None else 4.0
+        except Exception:
+            interval_sec = 4.0
+        interval_sec = max(2.0, min(15.0, interval_sec))
 
-        diag = ctx._diag_get(dkey).copy()
-        return {
-            "id": int(row["id"]),
-            "name": row["name"],
-            "host": row["host"],
-            "port": int(row["port"]),
-            "ros_version": row["ros_version"],
-            "status": "active" if active else "reconnect",
-            "idle_seconds": idle_seconds,
-            "last_error": diag.get("last_error"),
-            "reconnect_count": int(diag.get("reconnect_count", 0)),
-            "last_success_at": diag.get("last_success_at"),
-            "uptime": uptime,
+        async def _events():
+            while True:
+                if await request.is_disconnected():
+                    break
+                rows = _load_visible_device_rows(actor)
+                items = [_build_device_status(row, lite=lite) for row in rows]
+                payload = {
+                    "generated_at": datetime.utcnow().isoformat() + "Z",
+                    "items": items,
+                    "summary": _build_fleet_summary(items),
+                }
+                yield "event: fleet\n"
+                yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                await asyncio.sleep(interval_sec)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         }
+        return StreamingResponse(_events(), media_type="text/event-stream", headers=headers)
 
     @app.delete("/api/devices/{device_id}")
     def delete_device(device_id: int, request: Request) -> dict:
@@ -462,25 +604,17 @@ def register_device_routes(app, ctx) -> None:
     def device_ssh_status(device_id: int, request: Request) -> dict:
         actor = ctx.require_role(request, "viewer")
         row = ctx.load_device(device_id, actor)
-        password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
-        key = ctx._ssh_pool_key(row["host"], row["port"], row["username"], password)
-        dkey = ctx._device_key(row["host"], row["port"])
-
-        active = False
-        idle_seconds = None
-        queued = 0
-        with ctx.SSH_POOL_LOCK:
-            entry = ctx.SSH_POOL.get(key)
-            if entry and ctx._is_pool_entry_active(entry):
-                active = True
-                idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
-
-        with ctx.DEVICE_QUEUES_LOCK:
-            queue = ctx.DEVICE_QUEUES.get(dkey)
-            if queue:
-                queued = len(queue.get("tokens", []))
-
-        return {"status": "active" if active else "reconnect", "idle_seconds": idle_seconds, "queue_depth": queued}
+        status = _build_device_status(row, lite=True)
+        return {
+            "status": status["session_state"],
+            "session_state": status["session_state"],
+            "health_state": status["health_state"],
+            "idle_seconds": status["idle_seconds"],
+            "queue_depth": status["queue_depth"],
+            "stale": status["stale"],
+            "freshness_seconds": status["freshness_seconds"],
+            "last_health_check_at": status["last_health_check_at"],
+        }
 
     @app.post("/api/devices/{device_id}/disconnect")
     def device_disconnect(device_id: int, request: Request) -> dict:
@@ -490,7 +624,7 @@ def register_device_routes(app, ctx) -> None:
         key = ctx._ssh_pool_key(row["host"], row["port"], row["username"], password)
         dkey = ctx._device_key(row["host"], row["port"])
         ctx._drop_pooled_client(key)
-        ctx._diag_mark_error(dkey, "manual disconnect")
+        ctx._diag_mark_event(dkey, "disconnected_by_user")
         ctx.log_audit(actor["username"], actor["role"], "device_disconnect", device_id, row["name"])
         return {"ok": True, "status": "disconnected"}
 
@@ -500,15 +634,21 @@ def register_device_routes(app, ctx) -> None:
         row = ctx.load_device(device_id, actor)
         dkey = ctx._device_key(row["host"], row["port"])
         diag = ctx._diag_get(dkey).copy()
-        status = device_ssh_status(device_id, request)
+        status = _build_device_status(row, lite=True)
         return {
             "device_id": device_id,
-            "status": status["status"],
+            "status": status["session_state"],
+            "session_state": status["session_state"],
+            "health_state": status["health_state"],
             "queue_depth": status["queue_depth"],
             "idle_seconds": status["idle_seconds"],
+            "stale": status["stale"],
+            "freshness_seconds": status["freshness_seconds"],
+            "last_health_check_at": status["last_health_check_at"],
             "rtt_ms": diag.get("last_rtt_ms"),
             "last_error": diag.get("last_error"),
             "reconnect_count": diag.get("reconnect_count", 0),
+            "last_event": diag.get("last_event"),
             "last_connected_at": diag.get("last_connected_at"),
             "last_success_at": diag.get("last_success_at"),
             "last_attempt_at": diag.get("last_attempt_at"),

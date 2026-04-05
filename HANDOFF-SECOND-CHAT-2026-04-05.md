@@ -415,3 +415,59 @@ This section captures follow-up changes made after the original handoff body abo
   - `GET /api/auth/me` with both returned tokens
   - `GET /api/devices/ssh-concurrency` with admin token -> `{ok:true, limit:4, active:0, waiting:0}`
 - Result: pre-push smoke passed.
+
+## Session Delta 6 (Health Worker + Alerts + Runtime Toggle)
+
+1. Added autonomous background health worker and alerting runtime.
+- File: `app.py`
+- Added runtime configuration and state for periodic health probes independent from browser tabs.
+- Added optional webhook delivery and in-memory alert history with cooldown.
+- Added helper APIs backing context methods:
+  - `get_health_worker_runtime()`
+  - `list_alert_history(limit)`
+  - `list_active_health_issues()`
+  - `set_health_worker_enabled(enabled)`
+
+2. Added system API endpoints for worker/alerts and runtime toggle.
+- File: `routes_system.py`
+- New endpoints:
+  - `GET /api/system/health-worker`
+  - `PUT /api/system/health-worker` (admin)
+  - `GET /api/system/alerts`
+  - `GET /api/system/alerts/active`
+
+3. Added UI control button to disable/enable automatic status checks.
+- File: `static/js/pages/dashboard.js`
+- Device Status header now includes:
+  - current auto-check state label
+  - `Disable Auto Check` / `Enable Auto Check` toggle button
+- Toggle is runtime (no restart required) and restricted to admin.
+
+4. Updated environment/documentation for worker and alerts.
+- Files:
+  - `.env.example`
+  - `README.md`
+- Added documented vars:
+  - `MIM_HEALTH_WORKER_ENABLED`
+  - `MIM_HEALTH_WORKER_INTERVAL_SECONDS`
+  - `MIM_HEALTH_WORKER_COMMAND`
+  - `MIM_HEALTH_STALE_SECONDS`
+  - `MIM_HEALTH_HIGH_QUEUE_DEPTH`
+  - `MIM_ALERT_COOLDOWN_SECONDS`
+  - `MIM_ALERT_REPEAT_WHILE_DOWN`
+  - `MIM_ALERT_HISTORY_MAX`
+  - `MIM_ALERT_WEBHOOK_URL`
+
+5. Validation evidence.
+- Syntax:
+  - `python3 -m py_compile app.py routes_devices.py routes_terminal_backups.py routes_system.py routes_auth_users.py`
+  - result: OK
+- Deploy:
+  - `docker compose -p traefik -f docker-compose.yml build mikrotik-console`
+  - `docker compose -p traefik -f docker-compose.yml up -d --force-recreate mikrotik-console`
+  - result: container started
+- Runtime checks:
+  - `GET /api/health` -> `{"ok":true}`
+  - `GET /api/system/health-worker` with admin token -> runtime JSON returned
+  - `PUT /api/system/health-worker` tested for both disable and enable
+  - final worker state restored to enabled

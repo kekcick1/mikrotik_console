@@ -82,6 +82,29 @@ def register_system_routes(app, ctx) -> None:
             "top_actions": top_actions,
         }
 
+    @app.get("/api/system/health-worker")
+    def health_worker_runtime(request: Request) -> dict:
+        ctx.require_role(request, "viewer")
+        return ctx.get_health_worker_runtime()
+
+    @app.put("/api/system/health-worker")
+    def set_health_worker_runtime(payload: ctx.HealthWorkerToggleIn, request: Request) -> dict:
+        actor = ctx.require_role(request, "admin")
+        enabled = ctx.set_health_worker_enabled(bool(payload.enabled))
+        ctx.set_setting("health_worker_enabled", "1" if enabled else "0")
+        ctx.log_audit(actor["username"], actor["role"], "health_worker_set", None, f"enabled={int(enabled)}")
+        return ctx.get_health_worker_runtime()
+
+    @app.get("/api/system/alerts")
+    def list_alerts(request: Request, limit: int = 200) -> list[dict]:
+        ctx.require_role(request, "operator")
+        return ctx.list_alert_history(limit=limit)
+
+    @app.get("/api/system/alerts/active")
+    def list_active_alerts(request: Request) -> list[dict]:
+        ctx.require_role(request, "operator")
+        return ctx.list_active_health_issues()
+
     @app.post("/api/system/backup/create")
     def create_system_backup(request: Request) -> dict:
         actor = ctx.require_role(request, "admin")

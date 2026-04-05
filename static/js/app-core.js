@@ -11,6 +11,12 @@ const App = (() => {
 
   const roleLevel = { viewer: 1, operator: 2, admin: 3 };
   const pages = [];
+  const statusStream = {
+    es: null,
+    reconnectTimer: null,
+    listeners: [],
+    lastPayload: null,
+  };
 
   function can(role) {
     if (!state.currentUser) return false;
@@ -81,7 +87,83 @@ const App = (() => {
     return ct.indexOf('application/json') !== -1 ? resp.json() : {};
   }
 
+  function emitStatusPayload(payload) {
+    statusStream.lastPayload = payload || null;
+    for (var i = 0; i < statusStream.listeners.length; i++) {
+      try {
+        statusStream.listeners[i](payload || null);
+      } catch (_) {}
+    }
+  }
+
+  function clearStatusReconnectTimer() {
+    if (statusStream.reconnectTimer) {
+      clearTimeout(statusStream.reconnectTimer);
+      statusStream.reconnectTimer = null;
+    }
+  }
+
+  function closeStatusStream() {
+    clearStatusReconnectTimer();
+    if (statusStream.es) {
+      try { statusStream.es.close(); } catch (_) {}
+      statusStream.es = null;
+    }
+  }
+
+  function scheduleStatusReconnect() {
+    if (statusStream.reconnectTimer || !state.token) return;
+    statusStream.reconnectTimer = setTimeout(function() {
+      statusStream.reconnectTimer = null;
+      openStatusStream();
+    }, 3000);
+  }
+
+  function openStatusStream() {
+    if (statusStream.es || !state.token || !statusStream.listeners.length) return;
+    var url = '/api/devices/status-stream?lite=1&access_token=' + encodeURIComponent(state.token);
+    try {
+      statusStream.es = new EventSource(url);
+    } catch (_) {
+      scheduleStatusReconnect();
+      return;
+    }
+    function handleEventData(evt) {
+      if (!evt || !evt.data) return;
+      try {
+        var payload = JSON.parse(evt.data);
+        emitStatusPayload(payload);
+      } catch (_) {}
+    }
+    // Support both default SSE messages and named events emitted by backend.
+    statusStream.es.onmessage = handleEventData;
+    statusStream.es.addEventListener('fleet', handleEventData);
+    statusStream.es.onerror = function() {
+      closeStatusStream();
+      scheduleStatusReconnect();
+    };
+  }
+
+  function subscribeStatusStream(listener) {
+    if (typeof listener !== 'function') return function() {};
+    if (statusStream.listeners.indexOf(listener) === -1) {
+      statusStream.listeners.push(listener);
+    }
+    if (statusStream.lastPayload) {
+      try { listener(statusStream.lastPayload); } catch (_) {}
+    }
+    openStatusStream();
+    return function() {
+      var idx = statusStream.listeners.indexOf(listener);
+      if (idx >= 0) statusStream.listeners.splice(idx, 1);
+      if (!statusStream.listeners.length) closeStatusStream();
+    };
+  }
+
   function logout() {
+    closeStatusStream();
+    statusStream.lastPayload = null;
+    statusStream.listeners = [];
     state.token = '';
     state.currentUser = null;
     state.selectedDevice = null;
@@ -253,6 +335,8 @@ const App = (() => {
     addPage: addPage, navigate: navigate, buildNavbar: buildNavbar,
     loadDevices: loadDevices, bootstrap: bootstrap, pages: pages,
     clearNode: clearNode, createEl: createEl,
+    subscribeStatusStream: subscribeStatusStream,
+    closeStatusStream: closeStatusStream,
     openPwModal: function(userId, username) {
       var bd = el('pwModalBackdrop'); var mc = el('pwModalCard');
       if (!bd || !mc) return;
