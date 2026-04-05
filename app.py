@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import socket
+import ssl
 import sqlite3
 import tarfile
 import threading
@@ -1874,46 +1875,86 @@ def safe_ssh_exec(host: str, port: int, username: str, password: str, command: s
 
 
 def test_routeros_api(host: str, username: str, password: str, api_port: int = 8728, use_ssl: bool = False) -> dict:
-    pool = None
-    try:
-        pool = routeros_api.RouterOsApiPool(
-            host,
-            username=username,
-            password=password,
-            port=int(api_port),
-            use_ssl=bool(use_ssl),
-            ssl_verify=False,
-            ssl_verify_hostname=False,
-            plaintext_login=True,
-            socket_timeout=ROS_API_TIMEOUT,
-        )
-        api = pool.get_api()
-        identity_res = api.get_resource("/system/identity")
-        rows = identity_res.get()
-        name = rows[0].get("name") if rows else None
-        ros_version = None
-        try:
-            res = api.get_resource("/system/resource")
-            rrows = res.get()
-            if rrows:
-                ros_version = rrows[0].get("version")
-        except Exception:
-            ros_version = None
-        return {
-            "ok": True,
-            "identity": name or "unknown",
-            "ros_version": ros_version,
-            "api_port": int(api_port),
-            "api_ssl": bool(use_ssl),
+    def _connect_once(use_ssl_value: bool) -> dict:
+        pool = None
+        base_kwargs = {
+            "username": username,
+            "password": password,
+            "port": int(api_port),
+            "use_ssl": bool(use_ssl_value),
+            "ssl_verify": False,
+            "ssl_verify_hostname": False,
+            "plaintext_login": True,
         }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"RouterOS API connection failed on {host}:{api_port}: {e}")
-    finally:
-        if pool is not None:
+        try:
+            # routeros-api versions differ in supported init kwargs.
+            # Prefer timeout when available, but gracefully fallback for older versions.
             try:
-                pool.disconnect()
+                pool = routeros_api.RouterOsApiPool(
+                    host,
+                    socket_timeout=ROS_API_TIMEOUT,
+                    **base_kwargs,
+                )
+            except TypeError as e:
+                if "unexpected keyword argument 'socket_timeout'" not in str(e):
+                    raise
+                pool = routeros_api.RouterOsApiPool(host, **base_kwargs)
+            api = pool.get_api()
+            identity_res = api.get_resource("/system/identity")
+            rows = identity_res.get()
+            name = rows[0].get("name") if rows else None
+            ros_version = None
+            try:
+                res = api.get_resource("/system/resource")
+                rrows = res.get()
+                if rrows:
+                    ros_version = rrows[0].get("version")
+            except Exception:
+                ros_version = None
+            return {
+                "ok": True,
+                "identity": name or "unknown",
+                "ros_version": ros_version,
+                "api_port": int(api_port),
+                "api_ssl": bool(use_ssl_value),
+            }
+        finally:
+            if pool is not None:
+                try:
+                    pool.disconnect()
+                except Exception:
+                    pass
+
+    try:
+        return _connect_once(bool(use_ssl))
+    except ssl.SSLError as e:
+        # Common case: SSL enabled against plain API port 8728.
+        if bool(use_ssl):
+            try:
+                out = _connect_once(False)
+                out["warning"] = (
+                    "SSL handshake failed; plaintext API succeeded. "
+                    "Use api_ssl=false on port 8728, or enable api-ssl and use port 8729."
+                )
+                return out
             except Exception:
                 pass
+        hint = "Try api_ssl=false on port 8728, or api_ssl=true on port 8729."
+        raise HTTPException(status_code=400, detail=f"RouterOS API SSL error on {host}:{api_port}: {e}. {hint}")
+    except Exception as e:
+        try:
+            if bool(use_ssl) and int(api_port) == 8728:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"RouterOS API connection failed on {host}:{api_port}: {e}. "
+                        "Likely SSL is enabled on plain API port. Use api_ssl=false on 8728, "
+                        "or use api_ssl=true with 8729."
+                    ),
+                )
+        except HTTPException:
+            raise
+        raise HTTPException(status_code=400, detail=f"RouterOS API connection failed on {host}:{api_port}: {e}")
 
 
 def _is_compat_error_detail(text: str) -> bool:
@@ -2045,6 +2086,52 @@ def detect_ros_version(host: str, port: int, username: str, password: str) -> st
     return None
 
 
+def _resolve_device_ros_version(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    device_id: int | None,
+    profile: dict,
+    force_recheck: bool = False,
+) -> tuple[str | None, int | None, float]:
+    version = profile.get("version")
+    major = profile.get("major")
+    checked_ts = float(profile.get("version_checked_ts") or 0)
+    should_recheck_version = force_recheck or (not checked_ts) or ((time.time() - checked_ts) > ROS_VERSION_RECHECK_SECONDS)
+
+    # Reuse persisted DB version when in-memory cache is empty.
+    if version is None and device_id:
+        db_ver = get_device_ros_version(int(device_id))
+        if db_ver:
+            version = db_ver
+            major = _ros_major(version)
+            checked_ts = time.time()
+
+    if (version is None) or should_recheck_version:
+        try:
+            detected = detect_ros_version(host, port, username, password)
+            if detected:
+                version = detected
+                major = _ros_major(version)
+                checked_ts = time.time()
+        except HTTPException:
+            # If transport/auth fails, downstream call will fail with concrete error.
+            pass
+
+    with DEVICE_PROFILE_LOCK:
+        p = DEVICE_PROFILE.get(_device_key(host, port), {"version": None, "major": None, "commands": {}, "version_checked_ts": 0})
+        p.setdefault("commands", {})
+        p["version"] = version
+        p["major"] = major
+        if checked_ts:
+            p["version_checked_ts"] = checked_ts
+        DEVICE_PROFILE[_device_key(host, port)] = p
+    if device_id and version:
+        set_device_ros_version(int(device_id), version)
+    return version, major, checked_ts
+
+
 def _feature_command_candidates(feature: str, major: int | None) -> list[str]:
     if feature == "backup_export":
         if major and major >= 7:
@@ -2061,25 +2148,54 @@ def _feature_command_candidates(feature: str, major: int | None) -> list[str]:
             "/export compact",
         ]
     if feature == "interfaces_list":
+        if major and major >= 7:
+            return [
+                "/interface print detail terse without-paging",
+                "/interface print terse without-paging",
+                "/interface print without-paging",
+                "/interface print detail terse",
+                "/interface print terse",
+                "/interface print",
+            ]
         return [
+            "/interface print detail terse",
+            "/interface print terse",
             "/interface print detail terse without-paging",
             "/interface print terse without-paging",
             "/interface print without-paging",
+            "/interface print",
         ]
     if feature == "logs_read":
+        if major and major >= 7:
+            return [
+                "/log print without-paging",
+                "/log print",
+                "/system logging action print without-paging",
+            ]
         return [
-            "/log print without-paging",
             "/log print",
+            "/log print without-paging",
+            "/system logging action print",
         ]
     if feature == "resource_print":
+        if major and major >= 7:
+            return [
+                "/system resource print without-paging",
+                "/system resource print",
+            ]
         return [
-            "/system resource print without-paging",
             "/system resource print",
+            "/system resource print without-paging",
         ]
     if feature == "identity_print":
+        if major and major >= 7:
+            return [
+                "/system identity print without-paging",
+                "/system identity print",
+            ]
         return [
-            "/system identity print without-paging",
             "/system identity print",
+            "/system identity print without-paging",
         ]
     return []
 
@@ -2096,40 +2212,16 @@ def exec_feature_command(
     with DEVICE_PROFILE_LOCK:
         profile = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}, "version_checked_ts": 0})
 
-    version = profile.get("version")
-    major = profile.get("major")
-    checked_ts = float(profile.get("version_checked_ts") or 0)
-    should_recheck_version = (time.time() - checked_ts) > ROS_VERSION_RECHECK_SECONDS
-
-    # Reuse persisted version from DB if profile cache was lost (e.g., restart).
-    if version is None and device_id:
-        db_ver = get_device_ros_version(int(device_id))
-        if db_ver:
-            version = db_ver
-            major = _ros_major(version)
-            checked_ts = time.time()
-            remember_device_profile_version(host, port, version)
-
-    # Avoid heavy version probing on every connect/test/log call.
-    # Only probe lazily for backup feature and with cooldown.
-    if feature == "backup_export" and (version is None) and should_recheck_version:
-        try:
-            version = detect_ros_version(host, port, username, password)
-            major = _ros_major(version)
-        except HTTPException:
-            # Continue with fallback commands; transport/auth errors will be raised
-            # by actual command execution below.
-            pass
-        finally:
-            with DEVICE_PROFILE_LOCK:
-                p = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}, "version_checked_ts": 0})
-                p.setdefault("commands", {})
-                p["version"] = version
-                p["major"] = major
-                p["version_checked_ts"] = time.time()
-                DEVICE_PROFILE[dkey] = p
-            if device_id and version:
-                set_device_ros_version(device_id, version)
+    # Always resolve RouterOS version before selecting command set.
+    # Uses cache + DB + cooldown recheck to avoid excess probes.
+    version, major, checked_ts = _resolve_device_ros_version(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        device_id=device_id,
+        profile=profile,
+    )
 
     candidates = _feature_command_candidates(feature, major)
     preferred = profile.get("commands", {}).get(feature)
