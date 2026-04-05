@@ -471,3 +471,17 @@ This section captures follow-up changes made after the original handoff body abo
   - `GET /api/system/health-worker` with admin token -> runtime JSON returned
   - `PUT /api/system/health-worker` tested for both disable and enable
   - final worker state restored to enabled
+
+6. Commit and push (workflow-compliant).
+- Branch: `main`
+- Commit created:
+  - `a541a3f` — Add autonomous health worker alerts and runtime toggle
+- Pushed:
+  - `origin/main` -> `a541a3f`
+
+7. Release tag update.
+- Updated annotated `latest` tag to current commit and force-pushed.
+- Remote refs after push:
+  - `refs/tags/latest` -> `80b5cd9fff99f91daccba4700387cb96572416ae` (tag object)
+  - `refs/tags/latest^{}` -> `a541a3fa2782a91c5cd8e4b2703e50c5a088bc9c` (commit)
+- `stable` tag was not modified.
