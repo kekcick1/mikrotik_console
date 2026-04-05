@@ -81,6 +81,13 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       if (row) this.applyStatusToExistingCard(this.mergeWithCachedStatus(row));
     }
   },
+  refreshOneDeviceStatus: async function(deviceId, full) {
+    var id = Number(deviceId || 0);
+    if (!id) return;
+    var q = full ? '?lite=0' : '?lite=1';
+    var row = await App.api('/api/devices/' + id + '/status-overview' + q);
+    this.applyStatusToExistingCard(this.mergeWithCachedStatus(row));
+  },
   mergeWithCachedStatus: function(d) {
     var id = Number(d && d.id);
     if (!id) return d;
@@ -199,7 +206,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       this.stopConnectTicker();
       this.stopConnectStatusPolling();
       this.setConnectButtonsBusy(false);
-      await this.refreshConnectedDeviceStatuses();
+      if (dev && dev.id) await this.refreshOneDeviceStatus(dev.id, true);
     }
   },
   disconnectDevice: async function(device) {
@@ -228,7 +235,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       }
       App.status(e.message, true);
     } finally {
-      await this.refreshConnectedDeviceStatuses();
+      if (dev && dev.id) await this.refreshOneDeviceStatus(dev.id, false);
     }
   },
   connectSelected: async function() {
@@ -270,7 +277,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     } finally {
       this.stopConnectTicker();
       this.setConnectButtonsBusy(false);
-      await this.refreshConnectedDeviceStatuses();
+      if (dev && dev.id) await this.refreshOneDeviceStatus(dev.id, true);
     }
   },
   connectSelectedApi: async function() {

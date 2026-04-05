@@ -283,3 +283,35 @@ This section captures follow-up changes made after the original handoff body abo
 5. Runtime status in final phase.
 - service recovered and confirmed healthy after intermittent terminal/session interruptions.
 - `/api/health` returned `{"ok":true}`.
+
+## Session Delta 3 (Uptime Immediate/Sticky Fix)
+
+1. Reported user issue.
+- `uptime` appeared briefly and then disappeared.
+- Desired behavior: when user clicks/connects, uptime should appear immediately; when idle, keep last known value.
+
+2. Root cause.
+- Background refresh used lightweight status mode (`lite=1`) that may omit `uptime`.
+- UI update path replaced absent values with `-` in some flows.
+
+3. Backend fix.
+- Added per-device status endpoint:
+  - `GET /api/devices/{id}/status-overview?lite=0|1`
+- This enables immediate full refresh for exactly one device after connect.
+- File: routes_devices.py
+
+4. Frontend fix.
+- Dashboard now performs targeted full status refresh (`lite=0`) for selected device after successful connect (SSH/API).
+- Background polling still uses lightweight mode for performance.
+- Last-known cache is preserved so missing lightweight fields do not wipe visible values.
+- File: static/js/pages/dashboard.js
+
+5. Cache-busting.
+- Incremented static script version to force browser update:
+  - `v=20260405f`
+- File: static/index.html
+
+6. Validation.
+- py_compile: OK
+- service status: running
+- health check: `/api/health` -> `{"ok":true}`

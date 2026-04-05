@@ -286,6 +286,54 @@ def register_device_routes(app, ctx) -> None:
             )
         return result
 
+    @app.get("/api/devices/{device_id}/status-overview")
+    def device_status_overview(device_id: int, request: Request) -> dict:
+        actor = ctx.require_role(request, "viewer")
+        lite = request.query_params.get("lite") == "1"
+        row = ctx.load_device(device_id, actor)
+
+        password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
+        key = ctx._ssh_pool_key(row["host"], row["port"], row["username"], password)
+        dkey = ctx._device_key(row["host"], row["port"])
+
+        active = False
+        idle_seconds = None
+        uptime = None
+        with ctx.SSH_POOL_LOCK:
+            entry = ctx.SSH_POOL.get(key)
+            if entry and ctx._is_pool_entry_active(entry):
+                active = True
+                idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
+
+        if active and not lite:
+            try:
+                out_ctx = ctx.exec_feature_command(
+                    row["host"],
+                    int(row["port"]),
+                    row["username"],
+                    password,
+                    "resource_print",
+                    int(row["id"]),
+                )
+                uptime = _parse_uptime(out_ctx.get("output", ""))
+            except Exception:
+                pass
+
+        diag = ctx._diag_get(dkey).copy()
+        return {
+            "id": int(row["id"]),
+            "name": row["name"],
+            "host": row["host"],
+            "port": int(row["port"]),
+            "ros_version": row["ros_version"],
+            "status": "active" if active else "reconnect",
+            "idle_seconds": idle_seconds,
+            "last_error": diag.get("last_error"),
+            "reconnect_count": int(diag.get("reconnect_count", 0)),
+            "last_success_at": diag.get("last_success_at"),
+            "uptime": uptime,
+        }
+
     @app.delete("/api/devices/{device_id}")
     def delete_device(device_id: int, request: Request) -> dict:
         actor = ctx.require_role(request, "operator")
