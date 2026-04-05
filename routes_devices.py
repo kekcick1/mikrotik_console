@@ -67,11 +67,11 @@ def register_device_routes(app, ctx) -> None:
         with closing(ctx.db_conn()) as conn:
             if ctx.ROLE_LEVEL.get(actor["role"], 0) >= ctx.ROLE_LEVEL["admin"]:
                 rows = conn.execute(
-                    "SELECT id, name, host, port, username, password_enc, ros_version FROM devices ORDER BY name"
+                    "SELECT id, name, host, port, username, password_enc, ros_version, profile_key FROM devices ORDER BY name"
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, name, host, port, username, password_enc, ros_version FROM devices WHERE owner_id = ? ORDER BY name",
+                    "SELECT id, name, host, port, username, password_enc, ros_version, profile_key FROM devices WHERE owner_id = ? ORDER BY name",
                     (actor["id"],),
                 ).fetchall()
         return rows
@@ -148,11 +148,13 @@ def register_device_routes(app, ctx) -> None:
             else:
                 health_state = "unknown"
 
+        slo = ctx.get_device_slo_snapshot(int(row["id"])) or {}
         return {
             "id": int(row["id"]),
             "name": row["name"],
             "host": row["host"],
             "port": int(row["port"]),
+            "profile_key": row["profile_key"] or "branch-small",
             "ros_version": row["ros_version"],
             "status": session_state,
             "session_state": session_state,
@@ -169,6 +171,8 @@ def register_device_routes(app, ctx) -> None:
             "reconnect_count": int(diag.get("reconnect_count", 0)),
             "last_success_at": diag.get("last_success_at"),
             "uptime": uptime,
+            "slo_state": slo.get("slo_state"),
+            "slo_violations": slo.get("violations", []),
         }
 
     def _build_fleet_summary(items: list[dict]) -> dict:
@@ -231,11 +235,11 @@ def register_device_routes(app, ctx) -> None:
         with closing(ctx.db_conn()) as conn:
             if ctx.ROLE_LEVEL.get(actor["role"], 0) >= ctx.ROLE_LEVEL["admin"]:
                 rows = conn.execute(
-                    "SELECT id, name, host, port, username, ros_version, ros_version_checked_at, created_at FROM devices ORDER BY name"
+                    "SELECT id, name, host, port, username, ros_version, ros_version_checked_at, profile_key, created_at FROM devices ORDER BY name"
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, name, host, port, username, ros_version, ros_version_checked_at, created_at FROM devices WHERE owner_id = ? ORDER BY name",
+                    "SELECT id, name, host, port, username, ros_version, ros_version_checked_at, profile_key, created_at FROM devices WHERE owner_id = ? ORDER BY name",
                     (actor["id"],),
                 ).fetchall()
         return [dict(r) for r in rows]

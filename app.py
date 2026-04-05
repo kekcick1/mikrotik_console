@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from routes_auth_users import register_auth_user_routes
 from routes_devices import register_device_routes
+from routes_fleet_policy import register_fleet_policy_routes
 from routes_system import register_system_routes
 from routes_terminal_backups import register_terminal_backup_routes
 
@@ -72,6 +73,17 @@ ALERT_REPEAT_WHILE_DOWN = str(os.environ.get("MIM_ALERT_REPEAT_WHILE_DOWN", "0")
     "on",
 }
 ALERT_HISTORY_MAX = int(os.environ.get("MIM_ALERT_HISTORY_MAX", "500"))
+HEALTH_API_PROBE_ENABLED = str(os.environ.get("MIM_HEALTH_API_PROBE_ENABLED", "0")).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+HEALTH_PACKETLOSS_TARGET = os.environ.get("MIM_HEALTH_PACKETLOSS_TARGET", "1.1.1.1").strip() or "1.1.1.1"
+HEALTH_PACKETLOSS_COUNT = max(1, int(os.environ.get("MIM_HEALTH_PACKETLOSS_COUNT", "3")))
+HEALTH_BACKUP_FRESHNESS_HOURS_DEFAULT = max(1, int(os.environ.get("MIM_HEALTH_BACKUP_FRESHNESS_HOURS_DEFAULT", "48")))
+DRIFT_RECHECK_SECONDS = max(300, int(os.environ.get("MIM_DRIFT_RECHECK_SECONDS", "3600")))
+CHANGE_CONFIRM_TTL_SECONDS = max(60, int(os.environ.get("MIM_CHANGE_CONFIRM_TTL_SECONDS", "300")))
 
 ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
 SSH_POOL_LOCK = threading.Lock()
@@ -101,6 +113,8 @@ HEALTH_WORKER_RUNTIME = {
     "last_cycle_devices": 0,
     "last_cycle_failures": 0,
 }
+HEALTH_SLO_LOCK = threading.Lock()
+HEALTH_SLO_STATE: dict[int, dict] = {}
 
 
 def _derive_auth_secret(secret: str) -> str:
@@ -211,6 +225,19 @@ class HealthWorkerToggleIn(BaseModel):
     enabled: bool
 
 
+class DeviceProfileAssignIn(BaseModel):
+    profile_key: str = Field(min_length=2, max_length=64)
+
+
+class ChangePreviewIn(BaseModel):
+    command: str = Field(min_length=1, max_length=500)
+    device_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class ChangeApproveIn(BaseModel):
+    confirm_token: str | None = Field(default=None, max_length=4096)
+
+
 def init_db() -> None:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -275,6 +302,71 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_profiles (
+                key TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                max_batch_changes INTEGER NOT NULL,
+                require_manual_approval INTEGER NOT NULL,
+                policy_json TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS change_previews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_by TEXT NOT NULL,
+                created_role TEXT NOT NULL,
+                command TEXT NOT NULL,
+                device_ids_json TEXT NOT NULL,
+                diff_json TEXT NOT NULL,
+                risk_score INTEGER NOT NULL,
+                risk_level TEXT NOT NULL,
+                requires_approval INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                confirm_token TEXT,
+                approved_by TEXT,
+                approved_at TEXT,
+                executed_at TEXT,
+                execution_result_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_baselines (
+                device_id INTEGER PRIMARY KEY,
+                config_hash TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_slo_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id INTEGER NOT NULL,
+                ssh_reachable INTEGER NOT NULL,
+                api_reachable INTEGER,
+                cpu_load REAL,
+                ram_used_pct REAL,
+                packet_loss_pct REAL,
+                rtt_ms REAL,
+                backup_age_seconds INTEGER,
+                config_drift INTEGER,
+                slo_state TEXT,
+                metrics_json TEXT,
+                collected_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
+            )
+            """
+        )
 
         user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "password_hash" not in user_cols:
@@ -292,15 +384,19 @@ def init_db() -> None:
             conn.execute("ALTER TABLE devices ADD COLUMN ros_version TEXT")
         if "ros_version_checked_at" not in device_cols:
             conn.execute("ALTER TABLE devices ADD COLUMN ros_version_checked_at TEXT")
+        if "profile_key" not in device_cols:
+            conn.execute("ALTER TABLE devices ADD COLUMN profile_key TEXT DEFAULT 'branch-small'")
 
         conn.commit()
 
+    ensure_default_profiles()
     ensure_default_users()
 
     with closing(db_conn()) as conn:
         admin = conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()
         if admin:
             conn.execute("UPDATE devices SET owner_id = ? WHERE owner_id IS NULL", (int(admin["id"]),))
+            conn.execute("UPDATE devices SET profile_key = 'branch-small' WHERE profile_key IS NULL OR profile_key = ''")
             conn.commit()
 
 
@@ -432,6 +528,642 @@ def ensure_default_users() -> None:
         conn.commit()
 
 
+def ensure_default_profiles() -> None:
+    defaults = [
+        {
+            "key": "branch-small",
+            "name": "Branch Small",
+            "description": "Small branch office routers with conservative rollout limits.",
+            "max_batch_changes": 10,
+            "require_manual_approval": 0,
+            "policy": {
+                "slo": {
+                    "max_cpu_load_pct": 85,
+                    "max_ram_used_pct": 90,
+                    "max_packet_loss_pct": 5,
+                    "max_backup_age_hours": 48,
+                }
+            },
+        },
+        {
+            "key": "hq",
+            "name": "HQ",
+            "description": "Headquarters routers with stricter health requirements.",
+            "max_batch_changes": 5,
+            "require_manual_approval": 1,
+            "policy": {
+                "slo": {
+                    "max_cpu_load_pct": 75,
+                    "max_ram_used_pct": 85,
+                    "max_packet_loss_pct": 2,
+                    "max_backup_age_hours": 24,
+                }
+            },
+        },
+        {
+            "key": "dc-edge",
+            "name": "DC Edge",
+            "description": "Datacenter edge routers, lowest tolerance and smallest rollout batches.",
+            "max_batch_changes": 3,
+            "require_manual_approval": 1,
+            "policy": {
+                "slo": {
+                    "max_cpu_load_pct": 70,
+                    "max_ram_used_pct": 80,
+                    "max_packet_loss_pct": 1,
+                    "max_backup_age_hours": 12,
+                }
+            },
+        },
+    ]
+    with closing(db_conn()) as conn:
+        for row in defaults:
+            conn.execute(
+                """
+                INSERT INTO device_profiles(key, name, description, max_batch_changes, require_manual_approval, policy_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    max_batch_changes = excluded.max_batch_changes,
+                    require_manual_approval = excluded.require_manual_approval,
+                    policy_json = excluded.policy_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    row["key"],
+                    row["name"],
+                    row["description"],
+                    int(row["max_batch_changes"]),
+                    int(row["require_manual_approval"]),
+                    json.dumps(row["policy"], separators=(",", ":")),
+                ),
+            )
+        conn.commit()
+
+
+def _safe_json_loads(raw: str | None, default):
+    try:
+        if not raw:
+            return default
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def list_device_profiles() -> list[dict]:
+    with closing(db_conn()) as conn:
+        rows = conn.execute(
+            "SELECT key, name, description, max_batch_changes, require_manual_approval, policy_json, updated_at FROM device_profiles ORDER BY key"
+        ).fetchall()
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "key": row["key"],
+                "name": row["name"],
+                "description": row["description"],
+                "max_batch_changes": int(row["max_batch_changes"]),
+                "require_manual_approval": bool(row["require_manual_approval"]),
+                "policy": _safe_json_loads(row["policy_json"], {}),
+                "updated_at": row["updated_at"],
+            }
+        )
+    return out
+
+
+def get_device_profile(profile_key: str | None) -> dict:
+    key = (profile_key or "branch-small").strip().lower() or "branch-small"
+    with closing(db_conn()) as conn:
+        row = conn.execute(
+            "SELECT key, name, description, max_batch_changes, require_manual_approval, policy_json FROM device_profiles WHERE key = ?",
+            (key,),
+        ).fetchone()
+    if not row and key != "branch-small":
+        return get_device_profile("branch-small")
+    if not row:
+        raise HTTPException(status_code=500, detail="Default device profile is missing")
+    return {
+        "key": row["key"],
+        "name": row["name"],
+        "description": row["description"],
+        "max_batch_changes": int(row["max_batch_changes"]),
+        "require_manual_approval": bool(row["require_manual_approval"]),
+        "policy": _safe_json_loads(row["policy_json"], {}),
+    }
+
+
+def assign_device_profile(device_id: int, profile_key: str, actor: sqlite3.Row) -> dict:
+    profile = get_device_profile(profile_key)
+    row = load_device(device_id, actor)
+    with closing(db_conn()) as conn:
+        conn.execute("UPDATE devices SET profile_key = ? WHERE id = ?", (profile["key"], int(device_id)))
+        conn.commit()
+    log_audit(
+        actor["username"],
+        actor["role"],
+        "device_profile_set",
+        int(device_id),
+        f"{row['name']} -> {profile['key']}",
+    )
+    return profile
+
+
+def list_visible_devices(actor: sqlite3.Row, device_ids: list[int] | None = None) -> list[sqlite3.Row]:
+    ids = sorted({int(x) for x in (device_ids or []) if int(x) > 0})
+    with closing(db_conn()) as conn:
+        params: list = []
+        if ROLE_LEVEL.get(actor["role"], 0) >= ROLE_LEVEL["admin"]:
+            query = "SELECT * FROM devices"
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                query += f" WHERE id IN ({placeholders})"
+                params.extend(ids)
+            query += " ORDER BY name"
+            rows = conn.execute(query, tuple(params)).fetchall()
+        else:
+            query = "SELECT * FROM devices WHERE owner_id = ?"
+            params.append(int(actor["id"]))
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                query += f" AND id IN ({placeholders})"
+                params.extend(ids)
+            query += " ORDER BY name"
+            rows = conn.execute(query, tuple(params)).fetchall()
+    return rows
+
+
+def _risk_level(score: int) -> str:
+    s = int(score)
+    if s >= 80:
+        return "critical"
+    if s >= 55:
+        return "high"
+    if s >= 25:
+        return "medium"
+    return "low"
+
+
+def _command_risk(command: str) -> tuple[int, list[str]]:
+    score = 10
+    flags = []
+    checks = [
+        (r"\b(remove|delete)\b", 30, "destructive_keywords"),
+        (r"\b(set|add)\b", 12, "config_mutation"),
+        (r"/ip\s+firewall", 18, "firewall_change"),
+        (r"/routing\b", 20, "routing_change"),
+        (r"/system\b", 15, "system_scope"),
+        (r"show-sensitive", 12, "sensitive_export"),
+    ]
+    for pattern, points, label in checks:
+        if re.search(pattern, command, flags=re.IGNORECASE):
+            score += points
+            flags.append(label)
+    return score, flags
+
+
+def _make_change_confirm_token(preview_id: int, username: str) -> str:
+    payload = {
+        "preview_id": int(preview_id),
+        "u": username,
+        "exp": int(time.time()) + CHANGE_CONFIRM_TTL_SECONDS,
+    }
+    encoded = _b64u(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(AUTH_SECRET.encode(), encoded.encode(), hashlib.sha256).digest()
+    return f"{encoded}.{_b64u(sig)}"
+
+
+def _verify_change_confirm_token(token: str, preview_id: int, username: str) -> None:
+    payload = parse_token(token)
+    if int(payload.get("preview_id", 0)) != int(preview_id):
+        raise HTTPException(status_code=400, detail="Confirmation token is for another preview")
+    if payload.get("u") != username:
+        raise HTTPException(status_code=403, detail="Confirmation token is bound to another user")
+
+
+def create_change_preview(actor: sqlite3.Row, command: str, device_ids: list[int]) -> dict:
+    clean = validate_terminal_command(command)
+    ids = sorted({int(x) for x in device_ids if int(x) > 0})
+    if not ids:
+        raise HTTPException(status_code=400, detail="No target devices selected")
+    rows = list_visible_devices(actor, ids)
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=404, detail="Some target devices are missing or not accessible")
+
+    score, flags = _command_risk(clean)
+    diff_items = []
+    max_batch_limit = 0
+    approval_required_by_profile = False
+    profiles_map = {}
+    for row in rows:
+        profile = get_device_profile(row["profile_key"])
+        profiles_map[str(row["id"])] = profile["key"]
+        max_batch_limit = max(max_batch_limit, int(profile["max_batch_changes"]))
+        approval_required_by_profile = approval_required_by_profile or bool(profile["require_manual_approval"])
+        diff_items.append(
+            {
+                "device_id": int(row["id"]),
+                "device_name": row["name"],
+                "profile_key": profile["key"],
+                "diff": [
+                    f"- running-config (current): unchanged snapshot",
+                    f"+ pending-change: {clean}",
+                ],
+            }
+        )
+
+    if len(rows) > max(1, max_batch_limit):
+        score += 30
+        flags.append("batch_limit_exceeded")
+    if len(rows) >= 10:
+        score += 15
+        flags.append("mass_change")
+    elif len(rows) >= 5:
+        score += 8
+        flags.append("multi_device_change")
+
+    risk_level = _risk_level(score)
+    requires_approval = approval_required_by_profile or risk_level in {"high", "critical"} or len(rows) > max(1, max_batch_limit)
+    record = {
+        "created_by": actor["username"],
+        "created_role": actor["role"],
+        "command": clean,
+        "device_ids_json": json.dumps([int(r["id"]) for r in rows], separators=(",", ":")),
+        "diff_json": json.dumps(
+            {
+                "flags": flags,
+                "profiles": profiles_map,
+                "items": diff_items,
+            },
+            separators=(",", ":"),
+        ),
+        "risk_score": int(score),
+        "risk_level": risk_level,
+        "requires_approval": int(bool(requires_approval)),
+        "status": "previewed",
+    }
+    with closing(db_conn()) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO change_previews(
+                created_by, created_role, command, device_ids_json, diff_json,
+                risk_score, risk_level, requires_approval, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["created_by"],
+                record["created_role"],
+                record["command"],
+                record["device_ids_json"],
+                record["diff_json"],
+                record["risk_score"],
+                record["risk_level"],
+                record["requires_approval"],
+                record["status"],
+            ),
+        )
+        preview_id = int(cur.lastrowid)
+        confirm_token = _make_change_confirm_token(preview_id, actor["username"]) if requires_approval else None
+        conn.execute("UPDATE change_previews SET confirm_token = ? WHERE id = ?", (confirm_token, preview_id))
+        conn.commit()
+    log_audit(actor["username"], actor["role"], "change_preview_create", None, f"preview_id={preview_id}, devices={len(rows)}")
+    return {
+        "id": preview_id,
+        "status": "previewed",
+        "command": clean,
+        "targets": [{"id": int(r["id"]), "name": r["name"], "profile_key": profiles_map[str(r["id"])]} for r in rows],
+        "risk_score": int(score),
+        "risk_level": risk_level,
+        "requires_approval": bool(requires_approval),
+        "confirm_token": confirm_token,
+        "confirm_ttl_seconds": CHANGE_CONFIRM_TTL_SECONDS if confirm_token else None,
+        "diff": _safe_json_loads(record["diff_json"], {}),
+    }
+
+
+def _load_change_preview(preview_id: int) -> sqlite3.Row:
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT * FROM change_previews WHERE id = ?", (int(preview_id),)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Change preview not found")
+    return row
+
+
+def approve_change_preview(preview_id: int, actor: sqlite3.Row, confirm_token: str | None = None) -> dict:
+    row = _load_change_preview(preview_id)
+    if row["status"] != "previewed":
+        raise HTTPException(status_code=400, detail=f"Preview status is '{row['status']}', expected 'previewed'")
+    requires_approval = bool(row["requires_approval"])
+    risk_level = str(row["risk_level"])
+    if requires_approval:
+        if not confirm_token:
+            raise HTTPException(status_code=400, detail="Confirmation token is required for this preview")
+        _verify_change_confirm_token(confirm_token, int(preview_id), actor["username"])
+    if risk_level in {"high", "critical"} and ROLE_LEVEL.get(actor["role"], 0) < ROLE_LEVEL["admin"]:
+        raise HTTPException(status_code=403, detail="Admin role is required to approve high-risk changes")
+    with closing(db_conn()) as conn:
+        conn.execute(
+            "UPDATE change_previews SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (actor["username"], int(preview_id)),
+        )
+        conn.commit()
+    log_audit(actor["username"], actor["role"], "change_preview_approve", None, f"preview_id={preview_id}")
+    return {"ok": True, "id": int(preview_id), "status": "approved"}
+
+
+def execute_change_preview(preview_id: int, actor: sqlite3.Row) -> dict:
+    row = _load_change_preview(preview_id)
+    if row["status"] != "approved":
+        raise HTTPException(status_code=400, detail=f"Preview status is '{row['status']}', expected 'approved'")
+    device_ids = _safe_json_loads(row["device_ids_json"], [])
+    if not isinstance(device_ids, list):
+        raise HTTPException(status_code=400, detail="Invalid preview device list")
+    rows = list_visible_devices(actor, [int(x) for x in device_ids])
+    if len(rows) != len(device_ids):
+        raise HTTPException(status_code=403, detail="Some target devices are no longer accessible")
+
+    command = str(row["command"])
+    results = []
+    for drow in rows:
+        try:
+            password = fernet.decrypt(drow["password_enc"].encode()).decode()
+            output = safe_ssh_exec(drow["host"], int(drow["port"]), drow["username"], password, command)
+            results.append({"device_id": int(drow["id"]), "name": drow["name"], "ok": True, "output": output})
+        except HTTPException as e:
+            results.append({"device_id": int(drow["id"]), "name": drow["name"], "ok": False, "error": str(e.detail)})
+        except Exception as e:
+            results.append({"device_id": int(drow["id"]), "name": drow["name"], "ok": False, "error": str(e)})
+
+    failed = sum(1 for x in results if not x.get("ok"))
+    status = "executed" if failed == 0 else "executed_with_errors"
+    with closing(db_conn()) as conn:
+        conn.execute(
+            "UPDATE change_previews SET status = ?, executed_at = CURRENT_TIMESTAMP, execution_result_json = ? WHERE id = ?",
+            (status, json.dumps({"results": results}, separators=(",", ":")), int(preview_id)),
+        )
+        conn.commit()
+    log_audit(
+        actor["username"],
+        actor["role"],
+        "change_preview_execute",
+        None,
+        f"preview_id={preview_id}, failed={failed}, total={len(results)}",
+    )
+    return {
+        "ok": failed == 0,
+        "id": int(preview_id),
+        "status": status,
+        "failed": int(failed),
+        "total": len(results),
+        "results": results,
+    }
+
+
+def get_change_preview(preview_id: int) -> dict:
+    row = _load_change_preview(preview_id)
+    return {
+        "id": int(row["id"]),
+        "created_by": row["created_by"],
+        "created_role": row["created_role"],
+        "command": row["command"],
+        "risk_score": int(row["risk_score"]),
+        "risk_level": row["risk_level"],
+        "requires_approval": bool(row["requires_approval"]),
+        "status": row["status"],
+        "approved_by": row["approved_by"],
+        "approved_at": row["approved_at"],
+        "executed_at": row["executed_at"],
+        "diff": _safe_json_loads(row["diff_json"], {}),
+        "execution": _safe_json_loads(row["execution_result_json"], None),
+        "created_at": row["created_at"],
+    }
+
+
+def _to_float_or_none(value) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _parse_datetime_to_epoch(value: str | None) -> float | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    candidates = [text]
+    if " " in text and "T" not in text:
+        candidates.append(text.replace(" ", "T"))
+    if text.endswith("Z"):
+        candidates.append(text[:-1] + "+00:00")
+    for item in candidates:
+        try:
+            dt = datetime.fromisoformat(item)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return float(dt.timestamp())
+        except Exception:
+            continue
+    return None
+
+
+def _parse_routeros_resource_metrics(raw: str) -> dict:
+    text = raw or ""
+    out = {
+        "cpu_load_pct": None,
+        "ram_used_pct": None,
+    }
+    m_cpu = re.search(r"cpu-load:\s*(\d+(?:\.\d+)?)", text, flags=re.IGNORECASE)
+    if m_cpu:
+        out["cpu_load_pct"] = _to_float_or_none(m_cpu.group(1))
+    m_total = re.search(r"total-memory:\s*(\d+)", text, flags=re.IGNORECASE)
+    m_free = re.search(r"free-memory:\s*(\d+)", text, flags=re.IGNORECASE)
+    if m_total and m_free:
+        total = _to_float_or_none(m_total.group(1))
+        free = _to_float_or_none(m_free.group(1))
+        if total and total > 0 and free is not None:
+            used_pct = max(0.0, min(100.0, ((total - free) / total) * 100.0))
+            out["ram_used_pct"] = round(used_pct, 2)
+    return out
+
+
+def _parse_packet_loss_pct(raw: str) -> float | None:
+    text = raw or ""
+    m = re.search(r"packet-loss(?:=|:\s*)(\d+(?:\.\d+)?)\s*%", text, flags=re.IGNORECASE)
+    if not m:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*packet\s*loss", text, flags=re.IGNORECASE)
+    if m:
+        return _to_float_or_none(m.group(1))
+    return None
+
+
+def _latest_backup_age_seconds(device_id: int) -> int | None:
+    with closing(db_conn()) as conn:
+        row = conn.execute(
+            "SELECT created_at FROM backups WHERE device_id = ? ORDER BY id DESC LIMIT 1",
+            (int(device_id),),
+        ).fetchone()
+    if not row or not row["created_at"]:
+        return None
+    ts = _parse_datetime_to_epoch(str(row["created_at"]))
+    if ts is None:
+        return None
+    return int(max(0, time.time() - ts))
+
+
+def set_device_baseline_hash(device_id: int, config_hash: str) -> None:
+    with closing(db_conn()) as conn:
+        conn.execute(
+            """
+            INSERT INTO device_baselines(device_id, config_hash, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(device_id) DO UPDATE SET
+                config_hash = excluded.config_hash,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (int(device_id), str(config_hash)),
+        )
+        conn.commit()
+
+
+def get_device_baseline_hash(device_id: int) -> str | None:
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT config_hash FROM device_baselines WHERE device_id = ?", (int(device_id),)).fetchone()
+    if not row:
+        return None
+    return row["config_hash"]
+
+
+def capture_device_config_baseline(device_id: int, actor: sqlite3.Row) -> dict:
+    row = load_device(device_id, actor)
+    password = fernet.decrypt(row["password_enc"].encode()).decode()
+    out = exec_feature_command(row["host"], int(row["port"]), row["username"], password, "backup_export", int(row["id"]))
+    output = out.get("output", "")
+    config_hash = hashlib.sha256(output.encode("utf-8", errors="replace")).hexdigest()
+    set_device_baseline_hash(int(row["id"]), config_hash)
+    log_audit(actor["username"], actor["role"], "slo_baseline_capture", int(row["id"]), f"hash={config_hash[:12]}")
+    return {
+        "device_id": int(row["id"]),
+        "device_name": row["name"],
+        "profile_key": row["profile_key"] or "branch-small",
+        "config_hash": config_hash,
+        "captured_at": _utc_now_iso(),
+    }
+
+
+def _evaluate_slo_state(profile_key: str, metric: dict) -> tuple[str, list[str]]:
+    profile = get_device_profile(profile_key)
+    slo = profile.get("policy", {}).get("slo", {})
+    violations = []
+    ssh_reachable = bool(metric.get("ssh_reachable"))
+    if not ssh_reachable:
+        return "offline", ["ssh_unreachable"]
+    cpu = _to_float_or_none(metric.get("cpu_load_pct"))
+    ram = _to_float_or_none(metric.get("ram_used_pct"))
+    loss = _to_float_or_none(metric.get("packet_loss_pct"))
+    backup_age_seconds = metric.get("backup_age_seconds")
+    drift = metric.get("config_drift")
+    if cpu is not None and cpu > float(slo.get("max_cpu_load_pct", 85)):
+        violations.append("cpu")
+    if ram is not None and ram > float(slo.get("max_ram_used_pct", 90)):
+        violations.append("ram")
+    if loss is not None and loss > float(slo.get("max_packet_loss_pct", 5)):
+        violations.append("packet_loss")
+    if backup_age_seconds is not None:
+        max_backup_hours = float(slo.get("max_backup_age_hours", HEALTH_BACKUP_FRESHNESS_HOURS_DEFAULT))
+        if backup_age_seconds > int(max_backup_hours * 3600):
+            violations.append("backup_freshness")
+    if drift is True:
+        violations.append("config_drift")
+    if violations:
+        return "degraded", violations
+    return "healthy", []
+
+
+def record_device_slo_metric(device_id: int, metric: dict) -> dict:
+    device_id = int(device_id)
+    profile_key = metric.get("profile_key") or "branch-small"
+    slo_state, violations = _evaluate_slo_state(profile_key, metric)
+    payload = {
+        "device_id": device_id,
+        "ssh_reachable": bool(metric.get("ssh_reachable")),
+        "api_reachable": metric.get("api_reachable"),
+        "cpu_load_pct": _to_float_or_none(metric.get("cpu_load_pct")),
+        "ram_used_pct": _to_float_or_none(metric.get("ram_used_pct")),
+        "packet_loss_pct": _to_float_or_none(metric.get("packet_loss_pct")),
+        "rtt_ms": _to_float_or_none(metric.get("rtt_ms")),
+        "backup_age_seconds": metric.get("backup_age_seconds"),
+        "config_drift": metric.get("config_drift"),
+        "slo_state": slo_state,
+        "violations": violations,
+        "collected_at": _utc_now_iso(),
+    }
+    with closing(db_conn()) as conn:
+        conn.execute(
+            """
+            INSERT INTO device_slo_metrics(
+                device_id, ssh_reachable, api_reachable, cpu_load, ram_used_pct, packet_loss_pct,
+                rtt_ms, backup_age_seconds, config_drift, slo_state, metrics_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload["device_id"],
+                int(payload["ssh_reachable"]),
+                None if payload["api_reachable"] is None else int(bool(payload["api_reachable"])),
+                payload["cpu_load_pct"],
+                payload["ram_used_pct"],
+                payload["packet_loss_pct"],
+                payload["rtt_ms"],
+                payload["backup_age_seconds"],
+                None if payload["config_drift"] is None else int(bool(payload["config_drift"])),
+                payload["slo_state"],
+                json.dumps(payload, separators=(",", ":")),
+            ),
+        )
+        conn.commit()
+    with HEALTH_SLO_LOCK:
+        HEALTH_SLO_STATE[device_id] = payload
+    return payload
+
+
+def get_device_slo_snapshot(device_id: int) -> dict | None:
+    did = int(device_id)
+    with HEALTH_SLO_LOCK:
+        cached = HEALTH_SLO_STATE.get(did)
+        if cached:
+            return dict(cached)
+    with closing(db_conn()) as conn:
+        row = conn.execute(
+            "SELECT metrics_json FROM device_slo_metrics WHERE device_id = ? ORDER BY id DESC LIMIT 1",
+            (did,),
+        ).fetchone()
+    if not row:
+        return None
+    parsed = _safe_json_loads(row["metrics_json"], None)
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def list_fleet_slo(actor: sqlite3.Row) -> list[dict]:
+    rows = list_visible_devices(actor)
+    out = []
+    for row in rows:
+        snap = get_device_slo_snapshot(int(row["id"])) or {}
+        out.append(
+            {
+                "device_id": int(row["id"]),
+                "name": row["name"],
+                "host": row["host"],
+                "profile_key": row["profile_key"] or "branch-small",
+                **snap,
+            }
+        )
+    return out
+
+
 def _b64u(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
@@ -467,7 +1199,11 @@ def parse_token(token: str) -> dict:
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Invalid token payload: {e}")
 
-    if int(payload.get("exp", 0)) < int(time.time()):
+    try:
+        exp = int(payload.get("exp", 0))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token expiry")
+    if exp < int(time.time()):
         raise HTTPException(status_code=401, detail="Token expired")
 
     return payload
@@ -660,9 +1396,87 @@ def _set_health_worker_state(row: sqlite3.Row, is_down: bool, last_error: str | 
 def _health_worker_devices() -> list[sqlite3.Row]:
     with closing(db_conn()) as conn:
         rows = conn.execute(
-            "SELECT id, name, host, port, username, password_enc FROM devices ORDER BY id"
+            "SELECT id, name, host, port, username, password_enc, profile_key FROM devices ORDER BY id"
         ).fetchall()
     return rows
+
+
+def _collect_config_drift(row: sqlite3.Row, password: str) -> bool | None:
+    baseline_hash = get_device_baseline_hash(int(row["id"]))
+    if not baseline_hash:
+        return None
+    device_id = int(row["id"])
+    now = time.time()
+    with HEALTH_SLO_LOCK:
+        cached = HEALTH_SLO_STATE.get(device_id) or {}
+        checked_ts = float(cached.get("drift_checked_ts") or 0)
+        if (now - checked_ts) < DRIFT_RECHECK_SECONDS and ("config_drift" in cached):
+            return bool(cached.get("config_drift"))
+    try:
+        out = exec_feature_command(row["host"], int(row["port"]), row["username"], password, "backup_export", int(row["id"]))
+        current_hash = hashlib.sha256(out.get("output", "").encode("utf-8", errors="replace")).hexdigest()
+        drift = current_hash != baseline_hash
+    except Exception:
+        return None
+    with HEALTH_SLO_LOCK:
+        cached = HEALTH_SLO_STATE.get(device_id) or {}
+        cached["drift_checked_ts"] = now
+        cached["config_drift"] = drift
+        HEALTH_SLO_STATE[device_id] = cached
+    return drift
+
+
+def _collect_device_slo_metric(row: sqlite3.Row, password: str | None, ssh_reachable: bool, error_text: str | None = None) -> None:
+    device_id = int(row["id"])
+    dkey = _device_key(row["host"], int(row["port"]))
+    diag = _diag_get(dkey).copy()
+    metric = {
+        "profile_key": row["profile_key"] or "branch-small",
+        "ssh_reachable": bool(ssh_reachable),
+        "api_reachable": None,
+        "cpu_load_pct": None,
+        "ram_used_pct": None,
+        "packet_loss_pct": None,
+        "rtt_ms": diag.get("last_rtt_ms"),
+        "backup_age_seconds": _latest_backup_age_seconds(device_id),
+        "config_drift": None,
+    }
+    if ssh_reachable and password:
+        try:
+            resource = exec_feature_command(
+                row["host"],
+                int(row["port"]),
+                row["username"],
+                password,
+                "resource_print",
+                int(row["id"]),
+            )
+            parsed_resource = _parse_routeros_resource_metrics(resource.get("output", ""))
+            metric["cpu_load_pct"] = parsed_resource.get("cpu_load_pct")
+            metric["ram_used_pct"] = parsed_resource.get("ram_used_pct")
+        except Exception:
+            pass
+        try:
+            ping_raw = safe_ssh_exec(
+                row["host"],
+                int(row["port"]),
+                row["username"],
+                password,
+                f"/ping {HEALTH_PACKETLOSS_TARGET} count={HEALTH_PACKETLOSS_COUNT}",
+            )
+            metric["packet_loss_pct"] = _parse_packet_loss_pct(ping_raw)
+        except Exception:
+            pass
+        if HEALTH_API_PROBE_ENABLED:
+            try:
+                api_out = test_routeros_api(row["host"], row["username"], password, api_port=8728, use_ssl=False)
+                metric["api_reachable"] = bool(api_out.get("ok"))
+            except Exception:
+                metric["api_reachable"] = False
+        metric["config_drift"] = _collect_config_drift(row, password)
+    if error_text:
+        metric["error"] = str(error_text)[:300]
+    record_device_slo_metric(device_id, metric)
 
 
 def _health_worker_cycle() -> tuple[int, int]:
@@ -679,6 +1493,7 @@ def _health_worker_cycle() -> tuple[int, int]:
             safe_ssh_exec(row["host"], int(row["port"]), row["username"], password, HEALTH_WORKER_COMMAND)
             _diag_mark_event(dkey, "health_probe_ok")
             was_down, changed = _set_health_worker_state(row, is_down=False, last_error=None)
+            _collect_device_slo_metric(row, password=password, ssh_reachable=True, error_text=None)
             if was_down and changed:
                 _emit_health_alert("device_recovered", "info", row, "Device recovered and is reachable")
         except HTTPException as e:
@@ -686,6 +1501,7 @@ def _health_worker_cycle() -> tuple[int, int]:
             detail = str(e.detail)
             _diag_mark_event(dkey, "health_probe_failed")
             was_down, changed = _set_health_worker_state(row, is_down=True, last_error=detail)
+            _collect_device_slo_metric(row, password=None, ssh_reachable=False, error_text=detail)
             if (not was_down and changed) or ALERT_REPEAT_WHILE_DOWN:
                 _emit_health_alert("device_down", "critical", row, "Device is unreachable", detail)
         except Exception as e:
@@ -693,6 +1509,7 @@ def _health_worker_cycle() -> tuple[int, int]:
             detail = str(e)
             _diag_mark_event(dkey, "health_probe_failed")
             was_down, changed = _set_health_worker_state(row, is_down=True, last_error=detail)
+            _collect_device_slo_metric(row, password=None, ssh_reachable=False, error_text=detail)
             if (not was_down and changed) or ALERT_REPEAT_WHILE_DOWN:
                 _emit_health_alert("device_down", "critical", row, "Device is unreachable", detail)
 
@@ -1694,3 +2511,4 @@ register_auth_user_routes(app, _route_ctx)
 register_device_routes(app, _route_ctx)
 register_terminal_backup_routes(app, _route_ctx)
 register_system_routes(app, _route_ctx)
+register_fleet_policy_routes(app, _route_ctx)
