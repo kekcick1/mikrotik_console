@@ -142,7 +142,7 @@ App.addPage('devices', 'Devices', '🖥️', {
   },
   renderDevices: function() {
     var list = App.el('devList');
-    list.innerHTML = '';
+    App.clearNode(list);
     var filter = this._filterText;
     var visibleCount = 0;
     for (var i = 0; i < App.state.devices.length; i++) {
@@ -154,7 +154,12 @@ App.addPage('devices', 'Devices', '🖥️', {
         box.className = 'device-item' + (App.state.selectedDevice && App.state.selectedDevice.id === d.id ? ' active' : '');
         box.dataset.deviceId = String(d.id);
         var version = d.ros_version || 'unknown';
-        box.innerHTML = '<strong>' + d.name + '</strong><div class="muted">' + d.host + ':' + d.port + ' • ' + d.username + '</div><div class="muted">RouterOS: ' + version + '</div>';
+        var title = App.createEl('strong', { text: d.name });
+        var meta = App.createEl('div', { className: 'muted', text: d.host + ':' + d.port + ' • ' + d.username });
+        var versionEl = App.createEl('div', { className: 'muted', text: 'RouterOS: ' + version });
+        box.appendChild(title);
+        box.appendChild(meta);
+        box.appendChild(versionEl);
         if (App.can('operator')) {
           var edit = document.createElement('button');
           edit.textContent = 'Edit'; edit.className = 'secondary'; edit.style.marginTop = '6px';

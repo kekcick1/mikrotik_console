@@ -344,3 +344,74 @@ This section captures follow-up changes made after the original handoff body abo
 - py_compile: OK
 - editor error check for touched files: no errors
 - health check remained OK during session (`/api/health` returned ok)
+
+## Session Delta 5 (Security Hardening + Pre-Push Flow)
+
+1. Architecture refactor plan documented.
+- Added file: `ARCHITECTURE-REFACTOR-PLAN.md`
+- Purpose:
+  - outline safe phased extraction of config/auth/db/runtime/domain logic from `app.py`
+  - replace `SimpleNamespace(**globals())` route context with explicit typed dependencies
+  - keep API paths and runtime behavior stable during refactor
+
+2. Backend secret separation and CORS tightening.
+- app.py:
+  - introduced derived-signing fallback helper `_derive_auth_secret(...)`
+  - `MIM_AUTH_SECRET` now overrides token signing secret without reusing Fernet encryption key directly
+  - added `MIM_CORS_ORIGINS` parsing and only enable CORS middleware when cross-origin access is explicitly configured
+  - narrowed allowed methods/headers for configured CORS mode
+
+3. Deployment/config/docs updated for new security settings.
+- Files:
+  - `.env.example`
+  - `docker-compose.standalone.yml`
+  - `docker-compose.traefik.yml`
+  - `README.md`
+- Added documentation and compose wiring for:
+  - `MIM_AUTH_SECRET`
+  - `MIM_CORS_ORIGINS`
+
+4. Frontend XSS surface reduced in dynamic views.
+- Files:
+  - `static/js/app-core.js`
+  - `static/js/pages/dashboard.js`
+  - `static/js/pages/devices.js`
+  - `static/js/pages/tools.js`
+- Changes:
+  - added DOM helpers (`clearNode`, `createEl`)
+  - replaced risky dynamic `innerHTML` usage in device cards, dashboard status cards, interface rows, backup lists, user list, and audit list with DOM construction using text nodes/textContent
+
+5. Frontend cache-busting updated.
+- File: `static/index.html`
+- Script version bumped:
+  - `v=20260405g` -> `v=20260405h`
+
+6. Validation performed before commit/push.
+- backend syntax:
+  - `python3 -m compileall app.py routes_*.py`
+  - result: OK
+- container rebuild/recreate:
+  - `docker compose -p traefik build mikrotik-console`
+  - `docker compose -p traefik up -d --force-recreate mikrotik-console`
+  - result: container recreated successfully
+- runtime checks:
+  - `docker compose -p traefik ps mikrotik-console`
+  - startup logs showed Uvicorn startup complete
+  - `curl http://127.0.0.1:8080/api/health` -> `{"ok":true}`
+
+7. Pre-push intent.
+- User requested finalization with:
+  - commit current hardening changes
+  - push `main`
+  - create/update annotated tag `latest`
+  - keep `stable` untouched
+
+8. Final authenticated smoke before push.
+- Rebuilt/recreated container again after final cache-busting update.
+- Verified:
+  - `GET /api/health` -> `{"ok":true}`
+  - `POST /api/auth/login` for `admin`
+  - `POST /api/auth/login` for `operator`
+  - `GET /api/auth/me` with both returned tokens
+  - `GET /api/devices/ssh-concurrency` with admin token -> `{ok:true, limit:4, active:0, waiting:0}`
+- Result: pre-push smoke passed.

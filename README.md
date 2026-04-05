@@ -64,6 +64,7 @@ Minimal `.env` example:
 
 ```env
 MIM_SECRET=PASTE_GENERATED_KEY
+MIM_AUTH_SECRET=PASTE_LONG_RANDOM_STRING
 MIM_PORT=8080
 DATA_DIR=/data
 MIM_ADMIN_PASSWORD=admin
@@ -95,12 +96,14 @@ Use this mode if you already have Traefik and external network `traefik_net`.
 1. In `.env`, set:
 
 - `MIM_SECRET` (valid Fernet key)
+- `MIM_AUTH_SECRET` (recommended separate signing secret)
 - `TRAEFIK_DOMAIN` (for example: `example.com`)
 
 Minimal `.env` for Traefik mode:
 
 ```env
 MIM_SECRET=PASTE_GENERATED_KEY
+MIM_AUTH_SECRET=PASTE_LONG_RANDOM_STRING
 TRAEFIK_DOMAIN=example.com
 DATA_DIR=/data
 MIM_ADMIN_PASSWORD=admin
@@ -149,13 +152,15 @@ For admin users, open `Backups` page and use `System Backup (Full)`:
 
 Required:
 
-- `MIM_SECRET` - auth/signing secret, must be a valid Fernet key (url-safe base64)
+- `MIM_SECRET` - device password encryption key, must be a valid Fernet key (url-safe base64)
 
 Common optional:
 
+- `MIM_AUTH_SECRET` - separate token-signing secret; if omitted, a derived signing secret is generated from `MIM_SECRET`
 - `MIM_ADMIN_PASSWORD` (default: `admin`, only used when admin does not exist yet)
 - `MIM_PORT` (default: `8080`, standalone mode)
 - `DATA_DIR` (default: `/data`)
+- `MIM_CORS_ORIGINS` - comma-separated allowed browser origins for cross-origin API use; leave empty for same-origin UI deployments
 
 Optional tuning:
 
@@ -170,7 +175,8 @@ Optional tuning:
 ### Security Notes
 
 - Change default credentials immediately.
-- Keep `MIM_SECRET` private and strong.
+- Keep `MIM_SECRET` and `MIM_AUTH_SECRET` private and strong.
+- Keep `MIM_CORS_ORIGINS` empty unless you intentionally expose the API to another browser origin.
 - Limit access with firewall/VPN.
 
 ### Development
@@ -178,6 +184,7 @@ Optional tuning:
 ```bash
 pip install -r requirements.txt
 MIM_SECRET="$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
+MIM_AUTH_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
 
@@ -243,6 +250,7 @@ python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().
 
 ```env
 MIM_SECRET=PASTE_GENERATED_KEY
+MIM_AUTH_SECRET=PASTE_LONG_RANDOM_STRING
 MIM_PORT=8080
 DATA_DIR=/data
 MIM_ADMIN_PASSWORD=admin
@@ -274,12 +282,14 @@ docker compose -f docker-compose.standalone.yml up -d --build
 1. У `.env` заповніть:
 
 - `MIM_SECRET` (валідний Fernet key)
+- `MIM_AUTH_SECRET` (бажано окремий секрет підпису)
 - `TRAEFIK_DOMAIN` (наприклад: `example.com`)
 
 Мінімальний `.env` для режиму Traefik:
 
 ```env
 MIM_SECRET=PASTE_GENERATED_KEY
+MIM_AUTH_SECRET=PASTE_LONG_RANDOM_STRING
 TRAEFIK_DOMAIN=example.com
 DATA_DIR=/data
 MIM_ADMIN_PASSWORD=admin
@@ -328,13 +338,15 @@ docker compose -f docker-compose.traefik.yml up -d --build
 
 Обов'язково:
 
-- `MIM_SECRET` - секрет авторизації/підпису, валідний Fernet key (url-safe base64)
+- `MIM_SECRET` - ключ шифрування паролів девайсів, валідний Fernet key (url-safe base64)
 
 Часто потрібні:
 
+- `MIM_AUTH_SECRET` - окремий секрет підпису токенів; якщо не заданий, signing secret буде детерміновано виведений з `MIM_SECRET`
 - `MIM_ADMIN_PASSWORD` (типово: `admin`, застосовується лише якщо admin ще не існує)
 - `MIM_PORT` (типово: `8080`, для standalone режиму)
 - `DATA_DIR` (типово: `/data`)
+- `MIM_CORS_ORIGINS` - список дозволених browser origin через кому для cross-origin доступу до API; залиште порожнім для same-origin UI
 
 Додаткові параметри:
 
@@ -349,7 +361,8 @@ docker compose -f docker-compose.traefik.yml up -d --build
 ### Безпека
 
 - Одразу змініть стандартні паролі.
-- Тримайте `MIM_SECRET` приватним і складним.
+- Тримайте `MIM_SECRET` і `MIM_AUTH_SECRET` приватними й складними.
+- Залишайте `MIM_CORS_ORIGINS` порожнім, якщо UI та API відкриваються з одного origin.
 - Обмежте доступ через firewall/VPN.
 
 ### Розробка
@@ -357,5 +370,6 @@ docker compose -f docker-compose.traefik.yml up -d --build
 ```bash
 pip install -r requirements.txt
 MIM_SECRET="$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
+MIM_AUTH_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```

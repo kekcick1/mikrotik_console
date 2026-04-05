@@ -19,6 +19,24 @@ const App = (() => {
 
   function el(id) { return document.getElementById(id); }
 
+  function clearNode(node) {
+    if (node) node.replaceChildren();
+  }
+
+  function createEl(tag, opts) {
+    var node = document.createElement(tag);
+    opts = opts || {};
+    if (opts.className) node.className = opts.className;
+    if (opts.text != null) node.textContent = String(opts.text);
+    if (opts.html != null) node.innerHTML = opts.html;
+    if (opts.attrs) {
+      Object.keys(opts.attrs).forEach(function(key) {
+        node.setAttribute(key, String(opts.attrs[key]));
+      });
+    }
+    return node;
+  }
+
   function status(msg, isError) {
     if (!msg) return;
 
@@ -234,6 +252,7 @@ const App = (() => {
     selectDevice: selectDevice, buildDeviceSelector: buildDeviceSelector,
     addPage: addPage, navigate: navigate, buildNavbar: buildNavbar,
     loadDevices: loadDevices, bootstrap: bootstrap, pages: pages,
+    clearNode: clearNode, createEl: createEl,
     openPwModal: function(userId, username) {
       var bd = el('pwModalBackdrop'); var mc = el('pwModalCard');
       if (!bd || !mc) return;

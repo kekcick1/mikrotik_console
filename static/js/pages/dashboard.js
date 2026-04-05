@@ -105,7 +105,19 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     var el = App.el('dashStats');
     var total = App.state.devices.length;
     var sel = App.state.selectedDevice ? App.state.selectedDevice.name : 'None';
-    el.innerHTML = '<div class="stat-card"><div class="stat-value">' + total + '</div><div class="stat-label">Devices</div></div><div class="stat-card"><div class="stat-value">' + sel + '</div><div class="stat-label">Selected</div></div><div class="stat-card"><div class="stat-value">' + (App.state.currentUser ? App.state.currentUser.role : '-') + '</div><div class="stat-label">Role</div></div>';
+    var role = App.state.currentUser ? App.state.currentUser.role : '-';
+    App.clearNode(el);
+
+    function appendStatCard(value, label) {
+      var card = App.createEl('div', { className: 'stat-card' });
+      card.appendChild(App.createEl('div', { className: 'stat-value', text: value }));
+      card.appendChild(App.createEl('div', { className: 'stat-label', text: label }));
+      el.appendChild(card);
+    }
+
+    appendStatCard(total, 'Devices');
+    appendStatCard(sel, 'Selected');
+    appendStatCard(role, 'Role');
   },
   renderConnectionState: function() {
     var s = App.el('dashConnStatus');
@@ -333,23 +345,35 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       items = items.map(function(x) { return self.mergeWithCachedStatus(x); });
       var activeCount = items.filter(function(d) { return d.status === 'active'; }).length;
       var errCount = items.filter(function(d) { return d.last_error; }).length;
-      stats.innerHTML =
-        '<div class="stat-card"><div class="stat-value">' + items.length + '</div><div class="stat-label">Devices</div></div>' +
-        '<div class="stat-card" style="border-color:color-mix(in srgb, var(--ok) 50%, var(--line))"><div class="stat-value" style="color:var(--ok)">' + activeCount + '</div><div class="stat-label">Active SSH</div></div>' +
-        '<div class="stat-card" style="border-color:color-mix(in srgb,' + (errCount ? 'var(--bad)' : 'var(--line)') + ' 50%, var(--line))"><div class="stat-value" style="color:' + (errCount ? 'var(--bad)' : 'var(--muted)') + '">' + errCount + '</div><div class="stat-label">Have Errors</div></div>';
+      App.clearNode(stats);
+
+      function appendStatCard(value, label, borderColor, valueColor) {
+        var card = App.createEl('div', { className: 'stat-card' });
+        if (borderColor) card.style.borderColor = borderColor;
+        var valueEl = App.createEl('div', { className: 'stat-value', text: value });
+        if (valueColor) valueEl.style.color = valueColor;
+        card.appendChild(valueEl);
+        card.appendChild(App.createEl('div', { className: 'stat-label', text: label }));
+        stats.appendChild(card);
+      }
+
+      appendStatCard(items.length, 'Devices');
+      appendStatCard(activeCount, 'Active SSH', 'color-mix(in srgb, var(--ok) 50%, var(--line))', 'var(--ok)');
+      appendStatCard(errCount, 'Have Errors', errCount ? 'color-mix(in srgb, var(--bad) 50%, var(--line))' : 'color-mix(in srgb, var(--line) 100%, transparent)', errCount ? 'var(--bad)' : 'var(--muted)');
       self.renderDeviceStatuses(items);
     } catch (e) {
-      stats.innerHTML = '<div class="muted">' + e.message + '</div>';
-      grid.innerHTML = '';
+      App.clearNode(stats);
+      stats.appendChild(App.createEl('div', { className: 'muted', text: e.message }));
+      App.clearNode(grid);
     }
   },
   renderDeviceStatuses: function(items) {
     var self = this;
     var grid = App.el('dashDevStatusGrid');
     if (!grid) return;
-    grid.innerHTML = '';
+    App.clearNode(grid);
     if (!items.length) {
-      grid.innerHTML = '<div class="muted">No devices yet. Add devices on the Devices page.</div>';
+      grid.appendChild(App.createEl('div', { className: 'muted', text: 'No devices yet. Add devices on the Devices page.' }));
       return;
     }
     for (var i = 0; i < items.length; i++) {
@@ -417,12 +441,20 @@ App.addPage('dashboard', 'Dashboard', '📊', {
         main.appendChild(head);
         var meta = document.createElement('div');
         meta.className = 'dev-status-meta';
-        meta.innerHTML =
-          '<div>Host<strong data-role="host">' + d.host + ':' + d.port + '</strong></div>' +
-          '<div>Uptime<strong data-role="uptime">' + uptimeTxt + '</strong></div>' +
-          '<div>RouterOS<strong data-role="ros-version">' + rosTxt + '</strong></div>' +
-          '<div>Idle<strong data-role="idle">' + idleTxt + '</strong></div>' +
-          '<div>Reconnects<strong data-role="reconnects">' + (d.reconnect_count != null ? d.reconnect_count : '-') + '</strong></div>';
+        function appendMetaRow(label, value, role) {
+          var row = document.createElement('div');
+          row.appendChild(document.createTextNode(label));
+          var strong = document.createElement('strong');
+          strong.dataset.role = role;
+          strong.textContent = value;
+          row.appendChild(strong);
+          meta.appendChild(row);
+        }
+        appendMetaRow('Host', d.host + ':' + d.port, 'host');
+        appendMetaRow('Uptime', uptimeTxt, 'uptime');
+        appendMetaRow('RouterOS', rosTxt, 'ros-version');
+        appendMetaRow('Idle', idleTxt, 'idle');
+        appendMetaRow('Reconnects', d.reconnect_count != null ? d.reconnect_count : '-', 'reconnects');
         main.appendChild(meta);
         var err = document.createElement('div');
         err.className = 'dev-status-error';

@@ -61,7 +61,7 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
   renderInterfaces: function(items) {
     var self = this;
     var tbody = App.el('ifaceBody');
-    tbody.innerHTML = '';
+    App.clearNode(tbody);
     var unique = [];
     var seen = {};
     for (var k = 0; k < items.length; k++) {
@@ -74,11 +74,27 @@ App.addPage('interfaces', 'Interfaces', '🔌', {
     for (var i = 0; i < unique.length; i++) {
       (function(iface) {
         var tr = document.createElement('tr');
-        var badge = iface.disabled
-          ? '<span class="badge bad">disabled</span>'
-          : (iface.running ? '<span class="badge ok">running</span>' : '<span class="badge warn">up/no-link</span>');
-        tr.innerHTML = '<td><strong>' + iface.name + '</strong></td><td>' + (iface.port||'-') + '</td><td>' + (iface.type||'-') + '</td><td>' + (iface.mtu||'-') + '</td><td>' + (iface.comment||'-') + '</td><td>' + badge + '</td><td></td>';
-        var td = tr.querySelector('td:last-child');
+        function appendCell(text, tagName) {
+          var td = document.createElement('td');
+          var node = document.createElement(tagName || 'span');
+          node.textContent = text;
+          td.appendChild(node);
+          tr.appendChild(td);
+          return td;
+        }
+        appendCell(iface.name, 'strong');
+        appendCell(iface.port || '-');
+        appendCell(iface.type || '-');
+        appendCell(iface.mtu || '-');
+        appendCell(iface.comment || '-');
+        var statusTd = document.createElement('td');
+        var badge = document.createElement('span');
+        badge.className = 'badge ' + (iface.disabled ? 'bad' : (iface.running ? 'ok' : 'warn'));
+        badge.textContent = iface.disabled ? 'disabled' : (iface.running ? 'running' : 'up/no-link');
+        statusTd.appendChild(badge);
+        tr.appendChild(statusTd);
+        var td = document.createElement('td');
+        tr.appendChild(td);
         var actions = document.createElement('div');
         actions.className = 'iface-row-actions';
         var actBtn = document.createElement('button');
@@ -349,14 +365,22 @@ App.addPage('backups', 'Backups', '💾', {
       return;
     }
 
-    var html = '';
+    App.clearNode(resultList);
     for (var j = 0; j < filtered.length; j++) {
       var r = filtered[j];
       var statusClass = r.status === 'pending' ? 'warn' : (r.ok ? 'ok' : 'bad');
       var statusText = r.status === 'pending' ? 'PENDING' : (r.ok ? 'OK' : 'FAIL');
-      html += '<div class="item bulk-item"><span class="badge ' + statusClass + '">' + statusText + '</span><strong style="margin-left:8px">' + r.name + '</strong><div class="item-meta" style="margin-top:6px">' + r.message + '</div></div>';
+      var item = App.createEl('div', { className: 'item bulk-item' });
+      var badge = App.createEl('span', { className: 'badge ' + statusClass, text: statusText });
+      var title = App.createEl('strong', { text: r.name });
+      title.style.marginLeft = '8px';
+      var meta = App.createEl('div', { className: 'item-meta', text: r.message });
+      meta.style.marginTop = '6px';
+      item.appendChild(badge);
+      item.appendChild(title);
+      item.appendChild(meta);
+      resultList.appendChild(item);
     }
-    resultList.innerHTML = html;
   },
   onEnter: function() {
     if (App.state.selectedDevice) this.loadBackups();
@@ -372,12 +396,13 @@ App.addPage('backups', 'Backups', '💾', {
   renderBackups: function(items) {
     var self = this;
     var list = App.el('backupList');
-    list.innerHTML = '';
-    if (!items.length) { list.innerHTML = '<div class="muted">No backups yet</div>'; return; }
+    App.clearNode(list);
+    if (!items.length) { list.appendChild(App.createEl('div', { className: 'muted', text: 'No backups yet' })); return; }
     for (var i = 0; i < items.length; i++) {
       (function(b) {
         var item = document.createElement('div'); item.className = 'item';
-        item.innerHTML = '<strong>' + b.name + '</strong><div class="item-meta">' + (b.created_at || '') + '</div>';
+        item.appendChild(App.createEl('strong', { text: b.name }));
+        item.appendChild(App.createEl('div', { className: 'item-meta', text: b.created_at || '' }));
         var row = document.createElement('div'); row.className = 'row';
         var dl = document.createElement('button'); dl.className = 'secondary auto'; dl.textContent = 'Download';
         dl.onclick = function() { self.downloadBackup(b); };
@@ -528,16 +553,17 @@ App.addPage('backups', 'Backups', '💾', {
     var self = this;
     var list = App.el('systemBackupList');
     if (!list) return;
-    list.innerHTML = '';
+    App.clearNode(list);
     if (!items.length) {
-      list.innerHTML = '<div class="muted">No system backups yet</div>';
+      list.appendChild(App.createEl('div', { className: 'muted', text: 'No system backups yet' }));
       return;
     }
     for (var i = 0; i < items.length; i++) {
       (function(b) {
         var item = document.createElement('div');
         item.className = 'item';
-        item.innerHTML = '<strong>' + b.name + '</strong><div class="item-meta">' + b.created_at + ' • ' + b.size_bytes + ' bytes</div>';
+        item.appendChild(App.createEl('strong', { text: b.name }));
+        item.appendChild(App.createEl('div', { className: 'item-meta', text: b.created_at + ' • ' + b.size_bytes + ' bytes' }));
         var row = document.createElement('div');
         row.className = 'row';
         var dl = document.createElement('button');
@@ -622,11 +648,12 @@ App.addPage('admin', 'Admin', '🛡️', {
   },
   renderUsers: function(items) {
     var self = this;
-    var list = App.el('adminUserList'); list.innerHTML = '';
+    var list = App.el('adminUserList'); App.clearNode(list);
     for (var i = 0; i < items.length; i++) {
       (function(u) {
         var item = document.createElement('div'); item.className = 'item';
-        item.innerHTML = '<strong>' + u.username + '</strong><div class="item-meta">' + u.role + ' • ' + u.created_at + '</div>';
+        item.appendChild(App.createEl('strong', { text: u.username }));
+        item.appendChild(App.createEl('div', { className: 'item-meta', text: u.role + ' • ' + u.created_at }));
         var row = document.createElement('div'); row.className = 'row';
         var del = document.createElement('button'); del.className = 'secondary auto'; del.textContent = 'Delete';
         del.disabled = App.state.currentUser && u.username === App.state.currentUser.username;
@@ -645,12 +672,14 @@ App.addPage('admin', 'Admin', '🛡️', {
     if (!App.can('operator')) return;
     try {
       var items = await App.api('/api/audit?limit=150');
-      var list = App.el('adminAuditList'); list.innerHTML = '';
-      if (!items.length) { list.innerHTML = '<div class="muted">No recent activity</div>'; return; }
+      var list = App.el('adminAuditList'); App.clearNode(list);
+      if (!items.length) { list.appendChild(App.createEl('div', { className: 'muted', text: 'No recent activity' })); return; }
       for (var i = 0; i < items.length; i++) {
         var a = items[i];
         var div = document.createElement('div'); div.className = 'item';
-        div.innerHTML = '<strong>' + a.action + '</strong><div class="item-meta">' + a.created_at + ' • ' + a.username + ' (' + a.role + ')' + (a.device_name ? ' • ' + a.device_name : '') + '</div><div class="item-meta">' + (a.details || '') + '</div>';
+        div.appendChild(App.createEl('strong', { text: a.action }));
+        div.appendChild(App.createEl('div', { className: 'item-meta', text: a.created_at + ' • ' + a.username + ' (' + a.role + ')' + (a.device_name ? ' • ' + a.device_name : '') }));
+        div.appendChild(App.createEl('div', { className: 'item-meta', text: a.details || '' }));
         list.appendChild(div);
       }
     } catch (e) { App.status(e.message, true); }
@@ -682,16 +711,17 @@ App.addPage('admin', 'Admin', '🛡️', {
     var self = this;
     var list = App.el('adminSystemBackupList');
     if (!list) return;
-    list.innerHTML = '';
+    App.clearNode(list);
     if (!items.length) {
-      list.innerHTML = '<div class="muted">No system backups yet</div>';
+      list.appendChild(App.createEl('div', { className: 'muted', text: 'No system backups yet' }));
       return;
     }
     for (var i = 0; i < items.length; i++) {
       (function(b) {
         var item = document.createElement('div');
         item.className = 'item';
-        item.innerHTML = '<strong>' + b.name + '</strong><div class="item-meta">' + b.created_at + ' • ' + b.size_bytes + ' bytes</div>';
+        item.appendChild(App.createEl('strong', { text: b.name }));
+        item.appendChild(App.createEl('div', { className: 'item-meta', text: b.created_at + ' • ' + b.size_bytes + ' bytes' }));
         var row = document.createElement('div');
         row.className = 'row';
         var dl = document.createElement('button');

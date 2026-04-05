@@ -39,7 +39,6 @@ BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 SYSTEM_BACKUP_DIR = DATA_DIR / "system-backups"
 SYSTEM_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 SECRET = os.environ.get("MIM_SECRET", "")
-AUTH_SECRET = os.environ.get("MIM_AUTH_SECRET", SECRET)
 DEFAULT_ADMIN_PASSWORD = os.environ.get("MIM_ADMIN_PASSWORD", "admin")
 TOKEN_TTL_SECONDS = int(os.environ.get("MIM_TOKEN_TTL_SECONDS", "28800"))
 SSH_IDLE_TTL_SECONDS = int(os.environ.get("MIM_SSH_IDLE_TTL_SECONDS", "120"))
@@ -67,8 +66,25 @@ GLOBAL_SSH_ACTIVE = 0
 GLOBAL_SSH_WAITING = 0
 GLOBAL_SSH_LIMIT = max(1, GLOBAL_SSH_LIMIT_DEFAULT)
 
+
+def _derive_auth_secret(secret: str) -> str:
+    return hashlib.sha256(f"mim-auth:{secret}".encode()).hexdigest()
+
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    items = [item.strip() for item in (raw or "").split(",") if item.strip()]
+    if not items:
+        return []
+    if "*" in items:
+        return ["*"]
+    return items
+
+
 if not SECRET:
     raise RuntimeError("MIM_SECRET is required")
+
+AUTH_SECRET = os.environ.get("MIM_AUTH_SECRET", "").strip() or _derive_auth_secret(SECRET)
+CORS_ORIGINS = _parse_cors_origins(os.environ.get("MIM_CORS_ORIGINS", ""))
 
 if not AUTH_SECRET:
     raise RuntimeError("MIM_AUTH_SECRET or MIM_SECRET is required")
@@ -76,13 +92,14 @@ if not AUTH_SECRET:
 fernet = Fernet(SECRET.encode())
 
 app = FastAPI(title="Mikro Interface Manager")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials="*" not in CORS_ORIGINS,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 

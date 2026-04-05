@@ -11,6 +11,8 @@ services:
       - traefik_net
     environment:
       MIM_SECRET: ${MIM_SECRET}
+      MIM_AUTH_SECRET: ${MIM_AUTH_SECRET:-}
+      MIM_CORS_ORIGINS: ${MIM_CORS_ORIGINS:-}
       DATA_DIR: ${DATA_DIR:-/data}
       MIM_ADMIN_PASSWORD: ${MIM_ADMIN_PASSWORD:-admin}
       MIM_SSH_IDLE_TTL_SECONDS: ${MIM_SSH_IDLE_TTL_SECONDS:-120}
