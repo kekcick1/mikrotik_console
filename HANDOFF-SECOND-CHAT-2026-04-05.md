@@ -315,3 +315,32 @@ This section captures follow-up changes made after the original handoff body abo
 - py_compile: OK
 - service status: running
 - health check: `/api/health` -> `{"ok":true}`
+
+## Session Delta 4 (RouterOS Version Visibility Regression)
+
+1. Reported issue.
+- After recent fixes, RouterOS version stopped showing reliably in UI.
+
+2. Root cause.
+- Connect/test flows did not consistently persist/return version values in all paths.
+- API test path returned identity but version was not always propagated to DB/profile cache.
+
+3. Backend fixes.
+- app.py:
+  - `test_routeros_api(...)` now also reads `/system/resource` version when available and returns `ros_version`.
+- routes_devices.py:
+  - `/api/devices/{id}/test` now persists version from output or fallback detection into DB/profile cache.
+  - `/api/devices/{id}/test-api` now persists API-returned version into DB/profile cache.
+
+4. Frontend fix.
+- dashboard connection status messages (SSH/API) now display ROS version immediately when returned.
+- file: `static/js/pages/dashboard.js`
+
+5. Cache-busting update.
+- bumped static script version to `v=20260405g`.
+- file: `static/index.html`
+
+6. Validation.
+- py_compile: OK
+- editor error check for touched files: no errors
+- health check remained OK during session (`/api/health` returned ok)

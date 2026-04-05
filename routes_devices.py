@@ -417,7 +417,16 @@ def register_device_routes(app, ctx) -> None:
         row = ctx.load_device(device_id, actor)
         password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
         out = ctx.exec_feature_command(row["host"], row["port"], row["username"], password, "identity_print", int(row["id"]))
-        return {"ok": True, "output": out.get("output", ""), "command": out.get("command"), "ros_version": out.get("version")}
+        version = out.get("version") or row["ros_version"]
+        if not version:
+            try:
+                version = ctx.detect_ros_version(row["host"], int(row["port"]), row["username"], password)
+            except Exception:
+                version = None
+        if version:
+            ctx.set_device_ros_version(int(row["id"]), version)
+            ctx.remember_device_profile_version(row["host"], int(row["port"]), version)
+        return {"ok": True, "output": out.get("output", ""), "command": out.get("command"), "ros_version": version}
 
     @app.post("/api/devices/{device_id}/test-api")
     def test_device_api(device_id: int, request: Request) -> dict:
@@ -429,6 +438,10 @@ def register_device_routes(app, ctx) -> None:
         api_port = int(api_port_raw) if api_port_raw else 8728
         api_ssl = str(api_ssl_raw).lower() in {"1", "true", "yes", "on"}
         out = ctx.test_routeros_api(row["host"], row["username"], password, api_port=api_port, use_ssl=api_ssl)
+        version = out.get("ros_version")
+        if version:
+            ctx.set_device_ros_version(int(row["id"]), version)
+            ctx.remember_device_profile_version(row["host"], int(row["port"]), version)
         ctx.log_audit(actor["username"], actor["role"], "device_test_api", device_id, f"{row['name']}:{api_port} ssl={api_ssl}")
         return out
 

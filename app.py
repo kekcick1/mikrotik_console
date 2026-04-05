@@ -720,9 +720,18 @@ def test_routeros_api(host: str, username: str, password: str, api_port: int = 8
         identity_res = api.get_resource("/system/identity")
         rows = identity_res.get()
         name = rows[0].get("name") if rows else None
+        ros_version = None
+        try:
+            res = api.get_resource("/system/resource")
+            rrows = res.get()
+            if rrows:
+                ros_version = rrows[0].get("version")
+        except Exception:
+            ros_version = None
         return {
             "ok": True,
             "identity": name or "unknown",
+            "ros_version": ros_version,
             "api_port": int(api_port),
             "api_ssl": bool(use_ssl),
         }

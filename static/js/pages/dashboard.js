@@ -192,7 +192,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       this.markManualConnected(dev.id, true);
       this.stopConnectTicker();
       if (s) {
-        s.textContent = 'Connected: ' + dev.name + ' | ' + (out.output || 'SSH OK');
+        s.textContent = 'Connected: ' + dev.name + ' | ' + (out.output || 'SSH OK') + (out.ros_version ? ' | ROS ' + out.ros_version : '');
         s.style.color = 'var(--ok)';
       }
       App.status('Connected to ' + dev.name);
@@ -264,7 +264,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       this.markManualConnected(dev.id, true);
       this.stopConnectTicker();
       if (s) {
-        s.textContent = 'API connected: ' + dev.name + ' | identity: ' + (out.identity || 'unknown') + ' | port: ' + out.api_port + (out.api_ssl ? ' TLS' : '');
+        s.textContent = 'API connected: ' + dev.name + ' | identity: ' + (out.identity || 'unknown') + (out.ros_version ? ' | ROS ' + out.ros_version : '') + ' | port: ' + out.api_port + (out.api_ssl ? ' TLS' : '');
         s.style.color = 'var(--ok)';
       }
       App.status('API connected to ' + dev.name);
