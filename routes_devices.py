@@ -42,6 +42,19 @@ def register_device_routes(app, ctx) -> None:
                 ).fetchall()
         return [dict(r) for r in rows]
 
+    @app.get("/api/devices/ssh-concurrency")
+    def get_ssh_concurrency(request: Request) -> dict:
+        ctx.require_role(request, "viewer")
+        return {"ok": True, **ctx.get_global_ssh_runtime()}
+
+    @app.put("/api/devices/ssh-concurrency")
+    def set_ssh_concurrency(payload: ctx.SSHConcurrencyIn, request: Request) -> dict:
+        actor = ctx.require_role(request, "admin")
+        new_limit = ctx.set_global_ssh_limit(int(payload.limit))
+        ctx.set_setting("global_ssh_limit", str(new_limit))
+        ctx.log_audit(actor["username"], actor["role"], "ssh_concurrency_set", None, f"limit={new_limit}")
+        return {"ok": True, **ctx.get_global_ssh_runtime()}
+
     @app.post("/api/devices/refresh-versions")
     def refresh_devices_versions(request: Request) -> dict:
         actor = ctx.require_role(request, "operator")
@@ -205,6 +218,7 @@ def register_device_routes(app, ctx) -> None:
     @app.get("/api/devices/status-overview")
     def devices_status_overview(request: Request) -> list[dict]:
         actor = ctx.require_role(request, "viewer")
+        lite = request.query_params.get("lite") == "1"
         with closing(ctx.db_conn()) as conn:
             if ctx.ROLE_LEVEL.get(actor["role"], 0) >= ctx.ROLE_LEVEL["admin"]:
                 rows = conn.execute(
@@ -235,7 +249,7 @@ def register_device_routes(app, ctx) -> None:
                         active = True
                         idle_seconds = int(max(0, time.time() - entry.get("last_used", time.time())))
 
-            if active:
+            if active and not lite:
                 try:
                     out_ctx = ctx.exec_feature_command(
                         row["host"],

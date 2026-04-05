@@ -48,6 +48,8 @@ SSH_KEEPALIVE_SECONDS = int(os.environ.get("MIM_SSH_KEEPALIVE_SECONDS", "20"))
 SSH_RETRY_ATTEMPTS = int(os.environ.get("MIM_SSH_RETRY_ATTEMPTS", "2"))
 SSH_RETRY_BASE_MS = int(os.environ.get("MIM_SSH_RETRY_BASE_MS", "220"))
 BROADCAST_CONFIRM_TTL_SECONDS = int(os.environ.get("MIM_BROADCAST_CONFIRM_TTL_SECONDS", "90"))
+ROS_VERSION_RECHECK_SECONDS = int(os.environ.get("MIM_ROS_VERSION_RECHECK_SECONDS", "1800"))
+GLOBAL_SSH_LIMIT_DEFAULT = int(os.environ.get("MIM_GLOBAL_SSH_LIMIT", "4"))
 
 ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
 SSH_POOL_LOCK = threading.Lock()
@@ -58,6 +60,10 @@ SSH_DIAG_LOCK = threading.Lock()
 SSH_DIAG: dict[str, dict] = {}
 DEVICE_PROFILE_LOCK = threading.Lock()
 DEVICE_PROFILE: dict[str, dict] = {}
+GLOBAL_SSH_COND = threading.Condition()
+GLOBAL_SSH_ACTIVE = 0
+GLOBAL_SSH_WAITING = 0
+GLOBAL_SSH_LIMIT = max(1, GLOBAL_SSH_LIMIT_DEFAULT)
 
 if not SECRET:
     raise RuntimeError("MIM_SECRET is required")
@@ -142,6 +148,10 @@ class DeviceBulkImportIn(BaseModel):
     server_path: str | None = Field(default=None, max_length=500)
 
 
+class SSHConcurrencyIn(BaseModel):
+    limit: int = Field(ge=1, le=32)
+
+
 def init_db() -> None:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -197,6 +207,15 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
         user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "password_hash" not in user_cols:
@@ -231,6 +250,70 @@ def db_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return default
+    return str(row["value"])
+
+
+def set_setting(key: str, value: str) -> None:
+    with closing(db_conn()) as conn:
+        conn.execute(
+            "INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+            (key, str(value)),
+        )
+        conn.commit()
+
+
+def set_global_ssh_limit(limit: int) -> int:
+    global GLOBAL_SSH_LIMIT
+    safe = max(1, int(limit))
+    with GLOBAL_SSH_COND:
+        GLOBAL_SSH_LIMIT = safe
+        GLOBAL_SSH_COND.notify_all()
+    return safe
+
+
+def get_global_ssh_runtime() -> dict:
+    with GLOBAL_SSH_COND:
+        return {
+            "limit": int(GLOBAL_SSH_LIMIT),
+            "active": int(GLOBAL_SSH_ACTIVE),
+            "waiting": int(GLOBAL_SSH_WAITING),
+        }
+
+
+def _acquire_global_ssh_slot() -> None:
+    global GLOBAL_SSH_ACTIVE, GLOBAL_SSH_WAITING
+    with GLOBAL_SSH_COND:
+        GLOBAL_SSH_WAITING += 1
+        try:
+            while GLOBAL_SSH_ACTIVE >= GLOBAL_SSH_LIMIT:
+                GLOBAL_SSH_COND.wait()
+            GLOBAL_SSH_ACTIVE += 1
+        finally:
+            GLOBAL_SSH_WAITING = max(0, GLOBAL_SSH_WAITING - 1)
+
+
+def _release_global_ssh_slot() -> None:
+    global GLOBAL_SSH_ACTIVE
+    with GLOBAL_SSH_COND:
+        GLOBAL_SSH_ACTIVE = max(0, GLOBAL_SSH_ACTIVE - 1)
+        GLOBAL_SSH_COND.notify_all()
+
+
+def load_runtime_settings() -> None:
+    raw = get_setting("global_ssh_limit", str(GLOBAL_SSH_LIMIT_DEFAULT))
+    try:
+        limit = max(1, int(raw or GLOBAL_SSH_LIMIT_DEFAULT))
+    except Exception:
+        limit = max(1, GLOBAL_SSH_LIMIT_DEFAULT)
+    set_global_ssh_limit(limit)
 
 
 def hash_password(password: str, salt_hex: str | None = None) -> str:
@@ -437,7 +520,11 @@ def _run_device_queued(key: str, func):
 
     try:
         queue["last_used"] = time.time()
-        return func()
+        _acquire_global_ssh_slot()
+        try:
+            return func()
+        finally:
+            _release_global_ssh_slot()
     finally:
         with queue["cond"]:
             if queue["tokens"] and queue["tokens"][0] is token:
@@ -647,6 +734,20 @@ def _looks_like_command_error_output(text: str) -> bool:
     )
 
 
+def _is_transport_error_detail(text: str) -> bool:
+    t = (text or "").lower()
+    return any(
+        x in t
+        for x in [
+            "ssh timeout",
+            "authentication failed",
+            "network error",
+            "ssh protocol error",
+            "cannot reach",
+        ]
+    )
+
+
 def _extract_ros_version(text: str) -> str | None:
     content = text or ""
     m = re.search(r"version\s*[:=]\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)", content, flags=re.IGNORECASE)
@@ -688,7 +789,12 @@ def detect_ros_version(host: str, port: int, username: str, password: str) -> st
     for cmd in candidates:
         try:
             out = safe_ssh_exec(host, port, username, password, cmd)
-        except HTTPException:
+        except HTTPException as e:
+            detail = str(e.detail)
+            # Connection/auth failures should fail fast; retrying other version
+            # commands only adds long delays for unreachable devices.
+            if _is_transport_error_detail(detail):
+                raise
             continue
         except Exception:
             continue
@@ -747,22 +853,33 @@ def exec_feature_command(
 ) -> dict:
     dkey = _device_key(host, port)
     with DEVICE_PROFILE_LOCK:
-        profile = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}})
+        profile = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}, "version_checked_ts": 0})
 
     version = profile.get("version")
-    if not version:
-        version = detect_ros_version(host, port, username, password)
-        major = _ros_major(version)
-        with DEVICE_PROFILE_LOCK:
-            profile = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}})
-            profile["version"] = version
-            profile["major"] = major
-            profile.setdefault("commands", {})
-            DEVICE_PROFILE[dkey] = profile
-        if device_id:
-            set_device_ros_version(device_id, version)
-    else:
-        major = profile.get("major")
+    major = profile.get("major")
+    checked_ts = float(profile.get("version_checked_ts") or 0)
+    should_recheck_version = (time.time() - checked_ts) > ROS_VERSION_RECHECK_SECONDS
+
+    # Avoid heavy version probing on every connect/test/log call.
+    # Only probe lazily for backup feature and with cooldown.
+    if feature == "backup_export" and (version is None) and should_recheck_version:
+        try:
+            version = detect_ros_version(host, port, username, password)
+            major = _ros_major(version)
+        except HTTPException:
+            # Continue with fallback commands; transport/auth errors will be raised
+            # by actual command execution below.
+            pass
+        finally:
+            with DEVICE_PROFILE_LOCK:
+                p = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}, "version_checked_ts": 0})
+                p.setdefault("commands", {})
+                p["version"] = version
+                p["major"] = major
+                p["version_checked_ts"] = time.time()
+                DEVICE_PROFILE[dkey] = p
+            if device_id and version:
+                set_device_ros_version(device_id, version)
 
     candidates = _feature_command_candidates(feature, major)
     preferred = profile.get("commands", {}).get(feature)
@@ -792,11 +909,13 @@ def exec_feature_command(
             continue
 
         with DEVICE_PROFILE_LOCK:
-            p = DEVICE_PROFILE.get(dkey, {"version": version, "major": major, "commands": {}})
+            p = DEVICE_PROFILE.get(dkey, {"version": version, "major": major, "commands": {}, "version_checked_ts": checked_ts})
             p.setdefault("commands", {})
             p["commands"][feature] = cmd
             p["version"] = version
             p["major"] = major
+            if checked_ts:
+                p["version_checked_ts"] = checked_ts
             DEVICE_PROFILE[dkey] = p
 
         if device_id:
@@ -1123,6 +1242,7 @@ def ssh_import_script(host: str, port: int, username: str, password: str, script
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    load_runtime_settings()
 
 
 @app.on_event("shutdown")

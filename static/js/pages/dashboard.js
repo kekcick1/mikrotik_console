@@ -71,7 +71,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
   refreshConnectedDeviceStatuses: async function() {
     var connectedIds = Object.keys(this._manualConnected || {});
     if (!connectedIds.length) return;
-    var items = await App.api('/api/devices/status-overview');
+    var items = await App.api('/api/devices/status-overview?lite=1');
     for (var i = 0; i < connectedIds.length; i++) {
       var id = Number(connectedIds[i]);
       var row = items.find(function(x) { return Number(x.id) === id; });
@@ -141,9 +141,9 @@ App.addPage('dashboard', 'Dashboard', '📊', {
   startConnectStatusPolling: function() {
     var self = this;
     self.stopConnectStatusPolling();
-    // Keep Device Status cards fresh while connect/test is in progress.
+    // Keep status cards fresh with lightweight polling while connect/test runs.
     self._connectStatusPoller = setInterval(function() {
-      self.loadSystemMetrics().catch(function() {});
+      self.refreshConnectedDeviceStatuses().catch(function() {});
     }, 5000);
   },
   stopConnectStatusPolling: function() {
@@ -181,8 +181,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       this.stopConnectTicker();
       this.stopConnectStatusPolling();
       this.setConnectButtonsBusy(false);
-      await this.loadSystemMetrics();
-      await this.loadRouterLogs();
+      await this.refreshConnectedDeviceStatuses();
     }
   },
   disconnectDevice: async function(device) {
@@ -211,8 +210,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       }
       App.status(e.message, true);
     } finally {
-      await this.loadSystemMetrics();
-      await this.loadRouterLogs();
+      await this.refreshConnectedDeviceStatuses();
     }
   },
   connectSelected: async function() {
