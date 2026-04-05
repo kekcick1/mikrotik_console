@@ -58,6 +58,7 @@ def register_device_routes(app, ctx) -> None:
     @app.post("/api/devices/refresh-versions")
     def refresh_devices_versions(request: Request) -> dict:
         actor = ctx.require_role(request, "operator")
+        force = request.query_params.get("force") == "1"
         with closing(ctx.db_conn()) as conn:
             if ctx.ROLE_LEVEL.get(actor["role"], 0) >= ctx.ROLE_LEVEL["admin"]:
                 rows = conn.execute("SELECT * FROM devices ORDER BY name").fetchall()
@@ -68,12 +69,15 @@ def register_device_routes(app, ctx) -> None:
         for row in rows:
             try:
                 password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
+                if force:
+                    ctx.reset_device_profile(row["host"], int(row["port"]))
                 ver = ctx.detect_ros_version(row["host"], int(row["port"]), row["username"], password)
                 ctx.set_device_ros_version(int(row["id"]), ver)
+                ctx.remember_device_profile_version(row["host"], int(row["port"]), ver)
                 results.append({"id": int(row["id"]), "name": row["name"], "ok": True, "version": ver})
             except Exception as e:
                 results.append({"id": int(row["id"]), "name": row["name"], "ok": False, "error": str(e)})
-        return {"ok": True, "results": results}
+        return {"ok": True, "force": force, "results": results}
 
     @app.post("/api/devices")
     def create_device(request: Request, payload: ctx.DeviceIn) -> dict:
@@ -367,14 +371,31 @@ def register_device_routes(app, ctx) -> None:
         out = ctx.exec_feature_command(row["host"], row["port"], row["username"], password, "identity_print", int(row["id"]))
         return {"ok": True, "output": out.get("output", ""), "command": out.get("command"), "ros_version": out.get("version")}
 
-    @app.post("/api/devices/{device_id}/refresh-version")
-    def refresh_device_version(device_id: int, request: Request) -> dict:
+    @app.post("/api/devices/{device_id}/test-api")
+    def test_device_api(device_id: int, request: Request) -> dict:
         actor = ctx.require_role(request, "viewer")
         row = ctx.load_device(device_id, actor)
         password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
+        api_port_raw = request.query_params.get("api_port")
+        api_ssl_raw = request.query_params.get("api_ssl")
+        api_port = int(api_port_raw) if api_port_raw else 8728
+        api_ssl = str(api_ssl_raw).lower() in {"1", "true", "yes", "on"}
+        out = ctx.test_routeros_api(row["host"], row["username"], password, api_port=api_port, use_ssl=api_ssl)
+        ctx.log_audit(actor["username"], actor["role"], "device_test_api", device_id, f"{row['name']}:{api_port} ssl={api_ssl}")
+        return out
+
+    @app.post("/api/devices/{device_id}/refresh-version")
+    def refresh_device_version(device_id: int, request: Request) -> dict:
+        actor = ctx.require_role(request, "viewer")
+        force = request.query_params.get("force") == "1"
+        row = ctx.load_device(device_id, actor)
+        password = ctx.fernet.decrypt(row["password_enc"].encode()).decode()
+        if force:
+            ctx.reset_device_profile(row["host"], int(row["port"]))
         version = ctx.detect_ros_version(row["host"], int(row["port"]), row["username"], password)
         ctx.set_device_ros_version(int(row["id"]), version)
-        return {"ok": True, "id": int(row["id"]), "version": version}
+        ctx.remember_device_profile_version(row["host"], int(row["port"]), version)
+        return {"ok": True, "id": int(row["id"]), "version": version, "force": force}
 
     @app.get("/api/devices/{device_id}/ssh-status")
     def device_ssh_status(device_id: int, request: Request) -> dict:

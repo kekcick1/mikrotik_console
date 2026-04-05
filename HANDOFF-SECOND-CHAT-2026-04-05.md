@@ -240,3 +240,46 @@ This section captures follow-up changes made after the original handoff body abo
   - commit all above changes
   - create/update annotated tag `latest` to current commit
   - keep `stable` untouched unless explicitly requested.
+
+## Session Delta 2 (Final Additions)
+
+1. Version memory + forced refresh improvements.
+- app.py:
+  - added helpers to persist/reuse RouterOS version in-memory profile and DB bridge:
+    - `get_device_ros_version(...)`
+    - `remember_device_profile_version(...)`
+    - `reset_device_profile(...)`
+  - `exec_feature_command(...)` now reuses DB version when profile cache is missing.
+  - profile cache is cleared during runtime cleanup of removed/updated devices.
+- routes_devices.py:
+  - `POST /api/devices/refresh-versions?force=1`
+  - `POST /api/devices/{id}/refresh-version?force=1`
+  - force mode resets cached profile before re-detecting version.
+- static/js/pages/devices.js:
+  - Refresh Versions now calls forced refresh endpoint.
+
+2. RouterOS API connectivity support added (in addition to SSH).
+- requirements.txt:
+  - added dependency: `routeros-api==0.21.0`
+- app.py:
+  - added `test_routeros_api(...)` helper (plain/TLS options, timeout, identity read)
+- routes_devices.py:
+  - added endpoint: `POST /api/devices/{id}/test-api?api_port=...&api_ssl=...`
+- static/js/pages/dashboard.js:
+  - added `Connect API` button and flow (prompt port + TLS, then API test)
+
+3. Uptime/RouterOS disappearing issue fixed in Dashboard.
+- Problem:
+  - lite polling sometimes returns no uptime; UI replaced uptime with `-`.
+- Fix:
+  - added `_lastStatusCache` in dashboard page state.
+  - merged incoming status with cached values so `uptime`/`ros_version` persist when absent in lightweight refresh.
+  - UI now keeps last known values when user does nothing.
+
+4. Frontend cache-busting increments during final sequence.
+- static/index.html script version values were bumped incrementally to force fresh JS fetches:
+  - `20260405b` -> `20260405c` -> `20260405d` -> `20260405e`
+
+5. Runtime status in final phase.
+- service recovered and confirmed healthy after intermittent terminal/session interruptions.
+- `/api/health` returned `{"ok":true}`.

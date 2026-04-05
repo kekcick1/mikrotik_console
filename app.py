@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import paramiko
+import routeros_api
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +51,7 @@ SSH_RETRY_BASE_MS = int(os.environ.get("MIM_SSH_RETRY_BASE_MS", "220"))
 BROADCAST_CONFIRM_TTL_SECONDS = int(os.environ.get("MIM_BROADCAST_CONFIRM_TTL_SECONDS", "90"))
 ROS_VERSION_RECHECK_SECONDS = int(os.environ.get("MIM_ROS_VERSION_RECHECK_SECONDS", "1800"))
 GLOBAL_SSH_LIMIT_DEFAULT = int(os.environ.get("MIM_GLOBAL_SSH_LIMIT", "4"))
+ROS_API_TIMEOUT = int(os.environ.get("MIM_ROS_API_TIMEOUT", "8"))
 
 ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
 SSH_POOL_LOCK = threading.Lock()
@@ -700,6 +702,40 @@ def safe_ssh_exec(host: str, port: int, username: str, password: str, command: s
         raise HTTPException(status_code=400, detail=f"Network error while connecting to {host}:{port}: {e}")
 
 
+def test_routeros_api(host: str, username: str, password: str, api_port: int = 8728, use_ssl: bool = False) -> dict:
+    pool = None
+    try:
+        pool = routeros_api.RouterOsApiPool(
+            host,
+            username=username,
+            password=password,
+            port=int(api_port),
+            use_ssl=bool(use_ssl),
+            ssl_verify=False,
+            ssl_verify_hostname=False,
+            plaintext_login=True,
+            socket_timeout=ROS_API_TIMEOUT,
+        )
+        api = pool.get_api()
+        identity_res = api.get_resource("/system/identity")
+        rows = identity_res.get()
+        name = rows[0].get("name") if rows else None
+        return {
+            "ok": True,
+            "identity": name or "unknown",
+            "api_port": int(api_port),
+            "api_ssl": bool(use_ssl),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"RouterOS API connection failed on {host}:{api_port}: {e}")
+    finally:
+        if pool is not None:
+            try:
+                pool.disconnect()
+            except Exception:
+                pass
+
+
 def _is_compat_error_detail(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
@@ -776,6 +812,31 @@ def set_device_ros_version(device_id: int, version: str | None) -> None:
             (version, ts, device_id),
         )
         conn.commit()
+
+
+def get_device_ros_version(device_id: int) -> str | None:
+    with closing(db_conn()) as conn:
+        row = conn.execute("SELECT ros_version FROM devices WHERE id = ?", (device_id,)).fetchone()
+    if not row:
+        return None
+    return row["ros_version"]
+
+
+def remember_device_profile_version(host: str, port: int, version: str | None) -> None:
+    dkey = _device_key(host, port)
+    with DEVICE_PROFILE_LOCK:
+        p = DEVICE_PROFILE.get(dkey, {"version": None, "major": None, "commands": {}, "version_checked_ts": 0})
+        p.setdefault("commands", {})
+        p["version"] = version
+        p["major"] = _ros_major(version)
+        p["version_checked_ts"] = time.time()
+        DEVICE_PROFILE[dkey] = p
+
+
+def reset_device_profile(host: str, port: int) -> None:
+    dkey = _device_key(host, port)
+    with DEVICE_PROFILE_LOCK:
+        DEVICE_PROFILE.pop(dkey, None)
 
 
 def detect_ros_version(host: str, port: int, username: str, password: str) -> str | None:
@@ -859,6 +920,15 @@ def exec_feature_command(
     major = profile.get("major")
     checked_ts = float(profile.get("version_checked_ts") or 0)
     should_recheck_version = (time.time() - checked_ts) > ROS_VERSION_RECHECK_SECONDS
+
+    # Reuse persisted version from DB if profile cache was lost (e.g., restart).
+    if version is None and device_id:
+        db_ver = get_device_ros_version(int(device_id))
+        if db_ver:
+            version = db_ver
+            major = _ros_major(version)
+            checked_ts = time.time()
+            remember_device_profile_version(host, port, version)
 
     # Avoid heavy version probing on every connect/test/log call.
     # Only probe lazily for backup feature and with cooldown.
@@ -1069,6 +1139,8 @@ def _cleanup_deleted_device_runtime(host: str, port: int, username: str, passwor
         DEVICE_QUEUES.pop(dkey, None)
     with SSH_DIAG_LOCK:
         SSH_DIAG.pop(dkey, None)
+    with DEVICE_PROFILE_LOCK:
+        DEVICE_PROFILE.pop(dkey, None)
 
     keys_to_drop = []
     try:

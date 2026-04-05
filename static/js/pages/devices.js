@@ -187,10 +187,10 @@ App.addPage('devices', 'Devices', '🖥️', {
     var btn = App.el('devRefreshVersionsBtn');
     if (btn) btn.disabled = true;
     try {
-      var out = await App.api('/api/devices/refresh-versions', { method: 'POST' });
+      var out = await App.api('/api/devices/refresh-versions?force=1', { method: 'POST' });
       var ok = (out.results || []).filter(function(x) { return x.ok; }).length;
       var failed = (out.results || []).length - ok;
-      App.status('RouterOS versions refreshed: OK=' + ok + ', FAILED=' + failed, failed > 0);
+      App.status('RouterOS versions force-refreshed: OK=' + ok + ', FAILED=' + failed, failed > 0);
       await App.loadDevices();
       this.renderDevices();
     } catch (e) {

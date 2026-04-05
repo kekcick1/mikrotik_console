@@ -5,11 +5,13 @@ App.addPage('dashboard', 'Dashboard', '📊', {
   _dashboardAutoBusy: false,
   _manualConnected: {},
   _routerLogsCache: {},
+  _lastStatusCache: {},
   init: function() {
     this._manualConnected = {};
     this._routerLogsCache = {};
+    this._lastStatusCache = {};
     var c = App.el('page-dashboard');
-    c.innerHTML = '<div class="stats-row" id="dashStats"></div><div class="card panel" style="margin-bottom:14px"><div class="row"><h2 style="margin:0">MikroTik Connection Center</h2><button id="dashReloadDevices" class="secondary auto" type="button">Refresh Devices</button></div><div class="row"><button id="dashConnectBtn" type="button">Connect/Test</button><button id="dashOpenInterfaces" class="secondary" type="button">Interfaces</button><button id="dashOpenTerminal" class="secondary" type="button">Terminal</button><button id="dashOpenBackups" class="secondary" type="button">Backups</button><button id="dashDisconnectBtn" class="secondary" type="button">Disconnect</button></div><div id="dashConnStatus" class="status"></div></div><div style="margin-top:16px"><div class="card panel"><div class="row"><h2 style="margin:0">Router Logs (MikroTik)</h2><button id="dashRefreshRouterLogs" class="secondary auto" type="button">Refresh</button></div><div id="dashRouterLogs" class="terminal" style="margin-top:8px;min-height:180px;max-height:260px"></div></div></div>';
+    c.innerHTML = '<div class="stats-row" id="dashStats"></div><div class="card panel" style="margin-bottom:14px"><div class="row"><h2 style="margin:0">MikroTik Connection Center</h2><button id="dashReloadDevices" class="secondary auto" type="button">Refresh Devices</button></div><div class="row"><button id="dashConnectBtn" type="button">Connect/Test SSH</button><button id="dashConnectApiBtn" class="secondary" type="button">Connect API</button><button id="dashOpenInterfaces" class="secondary" type="button">Interfaces</button><button id="dashOpenTerminal" class="secondary" type="button">Terminal</button><button id="dashOpenBackups" class="secondary" type="button">Backups</button><button id="dashDisconnectBtn" class="secondary" type="button">Disconnect</button></div><div id="dashConnStatus" class="status"></div></div><div style="margin-top:16px"><div class="card panel"><div class="row"><h2 style="margin:0">Router Logs (MikroTik)</h2><button id="dashRefreshRouterLogs" class="secondary auto" type="button">Refresh</button></div><div id="dashRouterLogs" class="terminal" style="margin-top:8px;min-height:180px;max-height:260px"></div></div></div>';
     var insights = document.createElement('div');
     insights.className = 'card panel';
     insights.style.marginTop = '14px';
@@ -27,6 +29,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
       }
     };
     App.el('dashConnectBtn').onclick = this.connectSelected.bind(this);
+    App.el('dashConnectApiBtn').onclick = this.connectSelectedApi.bind(this);
     App.el('dashDisconnectBtn').onclick = this.disconnectSelected.bind(this);
     App.el('dashOpenInterfaces').onclick = function() {
       if (!App.state.selectedDevice) return App.status('Select a device first');
@@ -75,8 +78,21 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     for (var i = 0; i < connectedIds.length; i++) {
       var id = Number(connectedIds[i]);
       var row = items.find(function(x) { return Number(x.id) === id; });
-      if (row) this.applyStatusToExistingCard(row);
+      if (row) this.applyStatusToExistingCard(this.mergeWithCachedStatus(row));
     }
+  },
+  mergeWithCachedStatus: function(d) {
+    var id = Number(d && d.id);
+    if (!id) return d;
+    var cached = this._lastStatusCache[id] || {};
+    var merged = Object.assign({}, cached, d);
+    if (!d.uptime && cached.uptime) merged.uptime = cached.uptime;
+    if (!d.ros_version && cached.ros_version) merged.ros_version = cached.ros_version;
+    this._lastStatusCache[id] = {
+      uptime: merged.uptime || cached.uptime || null,
+      ros_version: merged.ros_version || cached.ros_version || null,
+    };
+    return merged;
   },
   renderStats: function() {
     var el = App.el('dashStats');
@@ -104,8 +120,10 @@ App.addPage('dashboard', 'Dashboard', '📊', {
   },
   setConnectButtonsBusy: function(busy) {
     var connectBtn = App.el('dashConnectBtn');
+    var connectApiBtn = App.el('dashConnectApiBtn');
     var disconnectBtn = App.el('dashDisconnectBtn');
     if (connectBtn) connectBtn.disabled = !!busy;
+    if (connectApiBtn) connectApiBtn.disabled = !!busy;
     if (disconnectBtn) disconnectBtn.disabled = !!busy;
   },
   markManualConnected: function(deviceId, connected) {
@@ -216,6 +234,48 @@ App.addPage('dashboard', 'Dashboard', '📊', {
   connectSelected: async function() {
     await this.connectDevice(App.state.selectedDevice);
   },
+  connectDeviceApi: async function(device) {
+    var dev = this.setSelectedDashboardDevice(device);
+    var s = App.el('dashConnStatus');
+    if (!dev) {
+      if (s) { s.textContent = 'Select a device first'; s.style.color = 'var(--warn)'; }
+      return;
+    }
+    var apiPortRaw = prompt('RouterOS API port (8728 for plain, 8729 for TLS):', '8728');
+    if (apiPortRaw === null) return;
+    var apiPort = Number(String(apiPortRaw).trim() || '8728');
+    if (!Number.isFinite(apiPort) || apiPort < 1 || apiPort > 65535) {
+      if (s) { s.textContent = 'Invalid API port'; s.style.color = 'var(--bad)'; }
+      return;
+    }
+    var useTls = confirm('Use API TLS/SSL (typically port 8729)?');
+
+    this.setConnectButtonsBusy(true);
+    this.startConnectTicker(dev.name);
+    try {
+      var out = await App.api('/api/devices/' + dev.id + '/test-api?api_port=' + encodeURIComponent(String(apiPort)) + '&api_ssl=' + (useTls ? '1' : '0'), { method: 'POST' });
+      this.markManualConnected(dev.id, true);
+      this.stopConnectTicker();
+      if (s) {
+        s.textContent = 'API connected: ' + dev.name + ' | identity: ' + (out.identity || 'unknown') + ' | port: ' + out.api_port + (out.api_ssl ? ' TLS' : '');
+        s.style.color = 'var(--ok)';
+      }
+      App.status('API connected to ' + dev.name);
+    } catch (e) {
+      if (s) {
+        s.textContent = 'API connection failed: ' + e.message;
+        s.style.color = 'var(--bad)';
+      }
+      App.status(e.message, true);
+    } finally {
+      this.stopConnectTicker();
+      this.setConnectButtonsBusy(false);
+      await this.refreshConnectedDeviceStatuses();
+    }
+  },
+  connectSelectedApi: async function() {
+    await this.connectDeviceApi(App.state.selectedDevice);
+  },
   disconnectSelected: async function() {
     await this.disconnectDevice(App.state.selectedDevice);
   },
@@ -263,6 +323,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     if (!stats || !grid) return;
     try {
       var items = await App.api('/api/devices/status-overview');
+      items = items.map(function(x) { return self.mergeWithCachedStatus(x); });
       var activeCount = items.filter(function(d) { return d.status === 'active'; }).length;
       var errCount = items.filter(function(d) { return d.last_error; }).length;
       stats.innerHTML =
@@ -286,6 +347,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     }
     for (var i = 0; i < items.length; i++) {
       (function(d) {
+        d = self.mergeWithCachedStatus(d);
         var isActive = d.status === 'active';
         var hasError = !isActive && d.last_error;
         var isSelected = App.state.selectedDevice && App.state.selectedDevice.id === d.id;
@@ -382,6 +444,7 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     }
   },
   applyStatusToExistingCard: function(d) {
+    d = this.mergeWithCachedStatus(d);
     var card = document.querySelector('.dev-status-card[data-device-id="' + d.id + '"]');
     if (!card) return;
 
@@ -403,10 +466,16 @@ App.addPage('dashboard', 'Dashboard', '📊', {
     if (idle) idle.textContent = (isActive && d.idle_seconds != null) ? (d.idle_seconds + 's') : '-';
 
     var uptime = card.querySelector('[data-role="uptime"]');
-    if (uptime) uptime.textContent = d.uptime || '-';
+    if (uptime) {
+      if (d.uptime) uptime.textContent = d.uptime;
+      else if (!uptime.textContent || uptime.textContent === '-') uptime.textContent = '-';
+    }
 
     var ros = card.querySelector('[data-role="ros-version"]');
-    if (ros) ros.textContent = d.ros_version || '-';
+    if (ros) {
+      if (d.ros_version) ros.textContent = d.ros_version;
+      else if (!ros.textContent || ros.textContent === '-') ros.textContent = '-';
+    }
 
     var reconnects = card.querySelector('[data-role="reconnects"]');
     if (reconnects) reconnects.textContent = d.reconnect_count != null ? d.reconnect_count : '-';
